@@ -83,6 +83,7 @@ class AnalysisContext:
     adapter: PCResolveAdapter
     _scan_cache: dict = field(default_factory=dict, init=False, repr=False)
     _transform_spans: dict = field(default_factory=dict, init=False, repr=False)
+    _return_transform_spans: dict = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def from_source(cls, source: SourceContext) -> "AnalysisContext":
@@ -532,6 +533,54 @@ def _depends_on_parameter(values: Iterable[dict], parameter: str, calls: dict) -
     return False
 
 
+def _routable_return(context: AnalysisContext, value: dict) -> bool:
+    """Keep exact tuple slots until the router proves the selected open shape.
+
+    Slot containment is not itself a sink proof. Unknown selections, selected
+    input elements and derived operations must not become whole containers.
+    """
+
+    if _open_container(context, value):
+        return True
+    if value.get("kind") not in {"parameter", "call_result"}:
+        return False
+    projection = value.get("projection", ())
+    path = value.get("output_path", ())
+    slots = path[:-1] if path and path[-1] == "*" else path
+    if not projection and not slots:
+        return False
+    if any(type(slot) is not int or slot < 0 for slot in (*projection, *slots)):
+        return False
+    if projection and value.get("kind") != "call_result":
+        return False
+    if value.get("relation") != "contained" and not (
+        projection and value.get("relation") == "derived"
+    ):
+        return False
+    # Reuse the existing source-evidence rejection of finite comprehensions.
+    if not _open_container(context, dict(value, projection=[], output_path=[], relation="direct")):
+        return False
+    for evidence in value.get("evidence", ()):
+        source = Path(evidence.get("file_path", ""))
+        if source not in context._return_transform_spans:
+            context._return_transform_spans[source] = {
+                (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+                for function in context.index.functions
+                if function.identity.file_path == source
+                for node in ast.walk(function.node)
+                if isinstance(node, (
+                    ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
+                    ast.JoinedStr, ast.FormattedValue,
+                ))
+            }
+        location = tuple(
+            evidence.get(name) for name in ("lineno", "col_offset", "end_lineno", "end_col_offset")
+        )
+        if location in context._return_transform_spans[source]:
+            return False
+    return True
+
+
 def _returned_flows(
     context: AnalysisContext,
     analysis: Any,
@@ -542,9 +591,10 @@ def _returned_flows(
 ) -> list[dict]:
     """Compose source-resolved whole-container returns using PCResolve's router.
 
-    An ordinary call's input dependency is not a return-shape guarantee. Only
-    unprojected container returns with source summaries are substituted, and
-    unknown effects, dynamic producers, cycles and depth limits stay visible.
+    An ordinary call's input dependency is not a return-shape guarantee. Whole
+    containers and exact tuple slots are routed through source summaries; only
+    a final open shape is a sink proof. Unknown effects, dynamic producers,
+    cycles and depth limits stay visible.
     """
 
     local_calls = {call.id: call for call in direct_calls(analysis, state.function.identity)}
@@ -574,7 +624,7 @@ def _returned_flows(
     def safe_values(values, owner, owner_analysis, endpoint):
         result = []
         for value in values:
-            if not _open_container(context, value):
+            if not _routable_return(context, value):
                 continue
             read_at = endpoint
             if endpoint is owner.node:
@@ -687,14 +737,20 @@ def _returned_flows(
                 (),
             )
             returns = safe_values(returns, definition, child, definition.node)
-            # A capture's wildcard describes elements of the returned container,
-            # not an extra nested container. Exact expansion bindings below
-            # supply the open space; finite capture paths remain finite.
+            # A capture's final wildcard describes its container elements,
+            # not an extra nested container, including inside exact tuple slots.
+            # Bindings supply the open space; finite capture paths stay finite.
             returns = [
-                dict(value, relation="direct", output_path=[])
+                dict(
+                    value,
+                    relation="contained" if value["output_path"][:-1] else "direct",
+                    output_path=value["output_path"][:-1],
+                )
                 if value.get("kind") == "parameter"
                 and value.get("source") in (definition.signature.vararg, definition.signature.kwarg)
-                and value.get("output_path") == ["*"]
+                and not value.get("projection")
+                and value.get("output_path", [None])[-1:] == ["*"]
+                and all(type(slot) is int and slot >= 0 for slot in value["output_path"][:-1])
                 else value
                 for value in returns
             ]
@@ -823,7 +879,14 @@ def _return_operation_boundary(
         if any(
             source.get("kind") == value.get("kind")
             and source.get("source") == value.get("source")
-            and _whole_container(source)
+            and (
+                _whole_container(source)
+                or source.get("kind") == "call_result"
+                and source.get("projection") == value.get("projection")
+                and source.get("projection")
+                and all(type(slot) is int and slot >= 0 for slot in source["projection"])
+                and not source.get("output_path")
+            )
             for source in (*receiver, *ordinary)
         ):
             return call_span(call)

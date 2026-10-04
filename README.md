@@ -92,8 +92,11 @@ The scanner supports functions, methods, `async def`, cross-file imports,
 aliases, public class re-exports, inherited methods and source constructor
 entries (`__init__`, otherwise `__new__`). Ambiguous constructor definitions
 are not replaced with a guessed entry. Bounded multi-hop propagation includes
-source-resolved helpers returning a whole container; the evidence path retains
-those return-producing calls, and they count toward `max_depth`. Classmethod and
+source-resolved helpers returning a whole container, including selection through
+exact nonnegative tuple return slots. Slot dependencies are routed before checking
+the final open-container shape; finite contents and selected input elements are
+not treated as open forwarding. The evidence path retains return-producing calls,
+and they count toward `max_depth`. Classmethod and
 `__new__` helper forwarding retains source-proven incoming PCResolve receiver
 contexts. Missing or mixed receiver facts remain boundaries; mutable configuration
 attributes and class-context container returns are not inferred. Passing a mapping
