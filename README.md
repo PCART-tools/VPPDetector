@@ -104,8 +104,19 @@ or sequence as an ordinary parameter is a propagation hop, not a VPP
 by itself; a finding requires an eventual `**mapping` or `*sequence` expansion
 into a signature without the matching variadic parameter. Unresolved targets,
 unsupported propagation, recursion and depth limits remain visible diagnostics.
+Ordinary helpers also retain incoming source-callable bindings when PCResolve
+provides an exact call-edge context. Mixed incoming contexts remain boundaries;
+the scanner does not infer callable targets from names or strings.
 Unknown effects on returned containers and transformations without open-shape
 facts (including comprehensions, copies and slices) remain analysis boundaries.
+When PCResolve supplies a proven returned-object alias, the scanner uses its
+separately materialized current contents, not the object's old input dependencies.
+Modeled finite-key removal retains the open remainder; clearing an alias does not
+restore the original contents. Object identity alone does not establish VPP.
+Complete ordinary-parameter constant-key removal facts can also preserve
+propagation through an existing alias. Normal-return effects do not prove call
+success or unconditional removal on exception paths; unproven effects remain
+analysis boundaries.
 When PCResolve proves a decorated callable's identity but leaves its effects
 unmodeled, the scanner does not use that callee's body to prove container returns
 or further forwarding. Direct expansion findings against its nominal signature

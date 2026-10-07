@@ -59,7 +59,7 @@ class PCResolveAdapter:
         return analysis
 
     def expand(self, analysis: Any, call_id: str) -> Any:
-        """Expand one exact edge, retaining its incoming receiver facts."""
+        """Expand one exact edge, retaining its incoming program facts."""
 
         cache_key = (id(analysis), call_id)
         cached = self._expansion_cache.get(cache_key)
@@ -163,6 +163,8 @@ def _expansion_kind(argument: dict) -> Optional[VariadicKind]:
 def _whole_container(flow: dict) -> bool:
     """Require an open container, not a selected element or dict key."""
 
+    if flow.get("object_only") or flow.get("container_object"):
+        return False
     if flow.get("projection") or flow.get("container_role") == "key":
         return False
     path = flow.get("output_path", [])
@@ -216,10 +218,16 @@ def scan_function(
         schema = getattr(analysis, "schema_version", schema)
         relevant_calls = set()
         for call in direct_calls(analysis, identity):
+            object_arguments = [
+                item.get("argument") for item in call.argument_sources
+                if any(value.get("object_only") or value.get("container_object")
+                       for value in item.get("sources", ()))
+            ]
             flows = [
                 flow
                 for flow in call.parameter_flows
                 if flow.get("source_parameter") == state.parameter
+                and flow.get("argument") not in object_arguments
             ]
             flows.extend(
                 _returned_flows(
@@ -408,7 +416,7 @@ def _receiver_contexts(analysis: Any, identity: FunctionIdentity) -> tuple:
 def _expand_body(
     context: AnalysisContext, analysis: Any, call: Any, definition: IndexedFunction
 ) -> Any:
-    """Expand class-dependent edges; retain neutral candidate-body analysis."""
+    """Retain source callable/class facts on unique helper edges."""
 
     if call.binding_status == "invalid":
         raise ResolutionError("No usable call binding for callee-body propagation.")
@@ -424,7 +432,12 @@ def _expand_body(
     if not required:
         neutral = context.adapter.analyze(definition.identity)
         required = bool(_receiver_contexts(neutral, definition.identity))
-        if not required:
+        incoming_callable = any(
+            value.get("kind") == "callable" or value.get("callable_type")
+            for argument in call.argument_sources
+            for value in argument.get("sources", ())
+        )
+        if not required and not incoming_callable:
             # Instance-method source candidates and ordinary helpers retain
             # the existing nominal body analysis. Never use this fallback for
             # a missing class receiver context.
@@ -442,6 +455,17 @@ def _expand_body(
     ]
     if len(summaries) != 1:
         raise ResolutionError("Callee-body expansion is unavailable or budget-limited.")
+    if not required:
+        # PCResolve's top-level calls merge incoming contexts. Do not combine
+        # a target from one edge with container facts from another. Keep the
+        # narrow single-edge case; mixed snapshots remain explicit boundaries.
+        for inner in direct_calls(child, definition.identity):
+            contexts = getattr(inner, "analysis_contexts", ())
+            if not contexts or any(
+                item.get("incoming_call_id") != call.id for item in contexts
+            ):
+                raise ResolutionError("Mixed incoming callable contexts cannot prove one path.")
+        return child
     receivers = _receiver_contexts(child, definition.identity)
     if len(receivers) > 1:
         raise ResolutionError("Mixed class receiver contexts cannot prove one forwarding path.")
@@ -540,6 +564,8 @@ def _routable_return(context: AnalysisContext, value: dict) -> bool:
     input elements and derived operations must not become whole containers.
     """
 
+    if value.get("object_only") or value.get("container_object"):
+        return False
     if _open_container(context, value):
         return True
     if value.get("kind") not in {"parameter", "call_result"}:
@@ -621,7 +647,23 @@ def _returned_flows(
             AnalysisBoundary(code, message, identity_from_target(call.caller), call_span(call))
         )
 
-    def safe_values(values, owner, owner_analysis, endpoint):
+    def safe_values(values, owner, owner_analysis, endpoint, remaining):
+        values = list(values)
+        endpoints = [value for value in values
+                     if value.get("object_only") or value.get("container_object")]
+        object_path = None
+        if endpoints:
+            if len(endpoints) != 1:
+                boundaries.append(
+                    AnalysisBoundary(
+                        "return_object_unproven", "Returned object contexts are conflicting.",
+                        owner.identity, call_span(endpoint) if endpoint is not owner.node else None,
+                    )
+                )
+                return []
+            object_path = object_context(endpoints[0], owner, owner_analysis, remaining)
+            if object_path is None:
+                return []
         result = []
         for value in values:
             if not _routable_return(context, value):
@@ -661,6 +703,23 @@ def _returned_flows(
                 )
                 continue
             result.append(value)
+        if endpoint is owner.node:
+            # A capture's final wildcard denotes its elements, not an extra
+            # nested container. The incoming binding supplies the open space.
+            result = [_capture_return_value(value, owner) for value in result]
+        if object_path and result:
+            # Adapt only current contents to the neutral dependency router.
+            # The synthetic binding never reads the producer's old inputs;
+            # its call context records the proven source-return witnesses.
+            key = ("vpp_object_contents", endpoints[0]["source"], len(calls))
+            calls[key] = ReturnCall(
+                key, None, (CallBinding("parameter", "contents", tuple(result)),),
+                ({"kind": "parameter", "source": "contents", "relation": "direct",
+                  "evidence": [], "conditions": [], "call_context": list(object_path[1:])},),
+            )
+            producers[key] = producers[object_path[0]]
+            return [{"kind": "call_result", "source": key, "relation": "direct",
+                     "evidence": [], "conditions": []}]
         return result
 
     def collect(values, owner, owner_analysis, remaining, stack):
@@ -722,7 +781,9 @@ def _returned_flows(
                 CallBinding(
                     "parameter",
                     item["parameter"],
-                    safe_values(item.get("sources", ()), owner, owner_analysis, producer),
+                    safe_values(
+                        item.get("sources", ()), owner, owner_analysis, producer, remaining - 1
+                    ),
                     _return_binding_path(item, definition, state.kind),
                 )
                 for item in producer.argument_sources
@@ -736,24 +797,7 @@ def _returned_flows(
                 ),
                 (),
             )
-            returns = safe_values(returns, definition, child, definition.node)
-            # A capture's final wildcard describes its container elements,
-            # not an extra nested container, including inside exact tuple slots.
-            # Bindings supply the open space; finite capture paths stay finite.
-            returns = [
-                dict(
-                    value,
-                    relation="contained" if value["output_path"][:-1] else "direct",
-                    output_path=value["output_path"][:-1],
-                )
-                if value.get("kind") == "parameter"
-                and value.get("source") in (definition.signature.vararg, definition.signature.kwarg)
-                and not value.get("projection")
-                and value.get("output_path", [None])[-1:] == ["*"]
-                and all(type(slot) is int and slot >= 0 for slot in value["output_path"][:-1])
-                else value
-                for value in returns
-            ]
+            returns = safe_values(returns, definition, child, definition.node, remaining - 1)
             summaries[definition.identity] = returns
             calls[producer.id] = ReturnCall(producer.id, definition.identity, bindings)
             producers[producer.id] = producer
@@ -766,9 +810,59 @@ def _returned_flows(
                 stack,
             )
 
+    def object_context(value, owner, owner_analysis, remaining, stack=()):
+        """Use identity only for the path; never recover its old input contents."""
+
+        producer = next((call for call in direct_calls(owner_analysis, owner.identity)
+                         if call.id == value.get("source")), None)
+        if producer is None:
+            boundary(
+                "return_object_unproven", "Returned object has no local call edge.", destination
+            )
+            return None
+        obj = value.get("container_object", {})
+        if not _proven_object_alias(value) or (
+            producer.analysis_status != "analyzed" or producer.binding_status != "complete"
+            or not producer.target or _target_status(owner_analysis, producer) != "resolved"
+            or identity_from_target(obj["function"]) != identity_from_target(producer.target)
+        ):
+            boundary("return_object_unproven", "Returned object identity is incomplete.", producer)
+            return None
+        if producer.id in stack:
+            boundary("recursive_return_flow", "Recursive returned object path.", producer)
+            return None
+        if remaining <= 0:
+            boundary(
+                "max_forwarding_depth_reached", "Returned object depth limit reached.", producer
+            )
+            return None
+        body_boundaries = _callee_body_boundaries(owner_analysis, producer)
+        if body_boundaries:
+            boundaries.extend(body_boundaries)
+            return None
+        producers[producer.id] = producer
+        incoming = [
+            source for item in producer.argument_sources
+            if item.get("parameter") == obj["parameter"]
+            for source in item.get("sources", ()) if source.get("object_only")
+        ]
+        if not incoming:
+            return (producer.id,)
+        if len(incoming) != 1 or (
+            incoming[0].get("container_object", {}).get("source") != obj["source"]
+        ):
+            boundary(
+                "return_object_unproven", "Returned object contexts are conflicting.", producer
+            )
+            return None
+        parent = object_context(
+            incoming[0], owner, owner_analysis, remaining - 1, (*stack, producer.id)
+        )
+        return (*parent, producer.id) if parent is not None else None
+
     result = []
     for number, argument in enumerate(arguments):
-        values = safe_values(argument["sources"], state.function, analysis, destination)
+        values = safe_values(argument["sources"], state.function, analysis, destination, budget)
         collect(values, state.function, analysis, budget, (state.function.identity,))
         entry_key = ("vpp_argument", destination.id, number)
         summaries[entry_key] = values
@@ -850,6 +944,20 @@ def _return_binding_path(item: dict, function: IndexedFunction, root_kind: Varia
     return () if formal is not None and item.get("parameter") == formal else path
 
 
+def _capture_return_value(value: dict, function: IndexedFunction) -> dict:
+    """Flatten only a capture's element wildcard, retaining exact tuple slots."""
+
+    path = value.get("output_path", ())
+    if (
+        value.get("kind") == "parameter"
+        and value.get("source") in (function.signature.vararg, function.signature.kwarg)
+        and not value.get("projection") and path[-1:] == ["*"]
+        and all(type(slot) is int and slot >= 0 for slot in path[:-1])
+    ):
+        return dict(value, relation="contained" if path[:-1] else "direct", output_path=path[:-1])
+    return value
+
+
 def _return_operation_boundary(
     analysis: Any, identity: FunctionIdentity, value: dict, destination: Any
 ) -> Optional[SourceSpan]:
@@ -868,6 +976,16 @@ def _return_operation_boundary(
         if call.id == getattr(destination, "id", None):
             continue
         if (call.lineno, call.col_offset) > endpoint:
+            continue
+        # This narrow PCResolve proof already excludes unknown helper effects.
+        # It is not a purity inference from a name or an input dependency.
+        if call.result_sources and all(
+            _proven_object_alias(source) for source in call.result_sources
+        ):
+            continue
+        if _modeled_mapping_removal(analysis, call):
+            # Only remove the unknown-effect barrier. Current content facts,
+            # not this normal-return postcondition, still determine forwarding.
             continue
         receiver = call.receiver_sources if call.target_status == "receiver_unresolved" else ()
         ordinary = (
@@ -891,6 +1009,44 @@ def _return_operation_boundary(
         ):
             return call_span(call)
     return None
+
+
+def _proven_object_alias(value: dict) -> bool:
+    """Recognize a complete identity fact, not an element dependency."""
+
+    obj = value.get("container_object", {})
+    return bool(
+        value.get("object_only") and value.get("kind") == "call_result"
+        and value.get("relation") == "direct" and not value.get("projection")
+        and not value.get("output_path") and not value.get("value_incomplete")
+        and obj.get("identity") == "argument_alias"
+        and obj.get("container_shape") in {"dict", "list", "tuple"}
+        and obj.get("source") and obj.get("parameter") and obj.get("function")
+    )
+
+
+def _modeled_mapping_removal(analysis: Any, call: Any) -> bool:
+    """Recognize complete bounded effects, not purity from a helper's spelling."""
+
+    if (
+        not call.target or _target_status(analysis, call) != "resolved"
+        or call.binding_status != "complete" or not call.effects
+        or any(boundary.get("call_id") == call.id and boundary.get("reason") in {
+            "mapping_effect_unproven", "mapping_effect_budget", "container_effect_unknown",
+            "identity_decorator_effects_unmodeled",
+        } for boundary in analysis.boundaries)
+    ):
+        return False
+    return all(
+        effect.get("kind") == "mapping_element" and effect.get("operation") in {"pop", "delete"}
+        and effect.get("completion") == "normal_return" and effect.get("status") == "bounded"
+        and effect.get("state_after") in {"absent", "conditional"}
+        and effect.get("call_id") == call.id
+        and effect.get("binding", {}).get("status") == "exact"
+        and len(effect.get("element_path", ())) == 1
+        and isinstance(effect["element_path"][0], str)
+        for effect in call.effects
+    )
 
 
 def _carrier_operation_boundary(
