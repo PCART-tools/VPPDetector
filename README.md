@@ -18,7 +18,9 @@ that all dynamic Python behavior is compatible.
 
 VPPDetector uses PCResolve for program facts and call resolution. API matching,
 parameter-change detection, repair selection and repair verification belong
-to PCART. The repository remains a research scanner and an incubation area
+to PCART. A separate `assess_change()` interface supplies call-specific handling
+facts for one already identified parameter change; it does not produce patches.
+The repository remains a research scanner and an incubation area
 for later PCART integration, without a separate PyPI release.
 
 ## Requirements
@@ -124,10 +126,57 @@ retain the effects diagnostic; they do not assert that decoration was effect-fre
 Source-candidate paths retain their target status: a finding does not establish
 exact runtime dispatch or prove that a particular client call will fail.
 
-For future PCART integration, an on-demand VPP result can determine whether
-the existing variadic-parameter preservation rule applies. The returned
-Python objects do not select a deletion or rename and do not assess a concrete
-client call's compatibility.
+Structural findings alone are not permission to delete or rename an argument:
+a fixed downstream signature may still accept that particular name, or the
+library may consume its value before forwarding the remaining keywords.
+
+### Parameter-level assessment
+
+```python
+from vppdetector import ChangeKind, ParameterChange, assess_change
+
+assessment = assess_change(
+    source,
+    FunctionIdentity("example.api", "wrapper"),
+    ParameterChange(ChangeKind.DELETE, "obsolete"),
+    "wrapper(obsolete=7)",
+    context=context,
+)
+print(assessment.state, assessment.reason)
+```
+
+The input is the new source snapshot, selected API implementation, one deletion
+or rename, and the original call expression or `ast.Call`. Results are ordinary
+Python objects with binding/use/path evidence and analysis boundaries:
+
+- `HANDLED`: the argument's value or presence is used, or its value binds to a
+  downstream explicit parameter. This is not a guarantee of behavior equivalence.
+- `REJECTED`: the supported call conditions lead to a parameter-specific binding
+  rejection. PCART still has to generate and verify a repair candidate.
+- `IGNORED`: the supported executed paths do not use the argument's value or
+  presence. Ignoring an argument is not itself permission to delete it.
+- `UNKNOWN`: binding, control flow, dispatch or effects prevent a definite result.
+
+The initial scope covers changed keywords captured by `**kwargs` (regardless of
+the container's name), direct/alias forwarding, finite expansions, bounded `pop`
+effects, simple literal/default-value guards and source-resolved downstream
+binding. Positional-element propagation, exception recovery, unknown mutation,
+deferred execution and unsupported transformations remain explicit boundaries.
+Assessment does not require a positive structural finding first.
+
+`CallContext` can additionally carry `bound_receiver`, trusted primitive
+`known_values` under source parameter names or receiver attribute paths, and
+`known_targets` pairing exact library `SourceSpan` locations with confirmed
+`FunctionIdentity` implementations. Facts must describe this call and this
+source version. A nominal PCResolve candidate is not a target confirmation;
+uncertain class dispatch remains `UNKNOWN` without independent evidence.
+The analyzer never executes client argument expressions or loads runtime object
+graphs. Context caches retain program facts, not API-only assessment decisions.
+
+These facts refine PCART's variadic preservation rule per changed argument,
+not for the entire `*args`/`**kwargs` channel. API evolution facts stay intact;
+PCART owns final compatibility decisions, candidate operations and whole-call
+verification. No separate assessment CLI is provided.
 
 ## Version 1.0 research scanner
 

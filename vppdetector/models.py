@@ -1,11 +1,12 @@
-"""Source identities and positive findings shared by both VPP scan modes."""
+"""Source identities, structural findings and parameter-level evidence."""
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 
 class StringEnum(str, Enum):
@@ -18,6 +19,43 @@ class StringEnum(str, Enum):
 class VariadicKind(StringEnum):
     POSITIONAL = "var_positional"
     KEYWORD = "var_keyword"
+
+
+class ChangeKind(StringEnum):
+    DELETE = "delete"
+    RENAME = "rename"
+
+
+class ParameterState(StringEnum):
+    """Disposition of one changed argument, not a repair or compatibility verdict."""
+
+    HANDLED = "handled"
+    REJECTED = "rejected"
+    IGNORED = "ignored"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class ParameterChange:
+    """One evolution fact already selected by the caller (normally PCART)."""
+
+    kind: ChangeKind
+    old_name: str
+    new_name: Optional[str] = None
+    old_position: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", ChangeKind(self.kind))
+        if not self.old_name.isidentifier():
+            raise ValueError("old_name must be a parameter name")
+        if self.kind is ChangeKind.RENAME and (
+            not self.new_name or not self.new_name.isidentifier()
+        ):
+            raise ValueError("A rename requires new_name")
+        if self.old_position is not None and (
+            type(self.old_position) is not int or self.old_position < 0
+        ):
+            raise ValueError("old_position must be a nonnegative integer")
 
 
 @dataclass(frozen=True)
@@ -48,12 +86,74 @@ class SourceSpan:
 
 
 @dataclass(frozen=True)
+class CallContext:
+    """Original call and optional trusted, finite facts for that call only.
+
+    known_values supplies primitive constants under source parameter names or
+    receiver attribute paths, e.g. (("self.closed", False),). These are caller
+    evidence, not expressions to execute. None is distinct from an unknown value.
+    bound_receiver overrides the indexed method convention for unbound calls.
+    known_targets confirms implementations at exact library call locations;
+    copying a nominal PCResolve candidate is not an independent confirmation.
+    """
+
+    expression: Union[str, ast.Call]
+    bound_receiver: Optional[bool] = None
+    known_values: Tuple[Tuple[str, object], ...] = ()
+    callsite: Optional[SourceSpan] = None
+    known_targets: Tuple[Tuple[SourceSpan, FunctionIdentity], ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
+            raise ValueError("bound_receiver must be bool or None")
+        names = [name for name, _ in self.known_values]
+        if len(set(names)) != len(names) or any(
+            not all(part.isidentifier() for part in name.split(".")) for name in names
+        ):
+            raise ValueError("known_values requires unique parameter or attribute paths")
+        if any(
+            type(value) not in (str, bytes, int, float, bool, type(None))
+            for _, value in self.known_values
+        ):
+            raise ValueError("known_values accepts only primitive constants")
+        spans = [span for span, _ in self.known_targets]
+        if len(set(spans)) != len(spans):
+            raise ValueError("known_targets requires unique library call locations")
+
+
+@dataclass(frozen=True)
 class AnalysisBoundary:
     """A diagnostic explaining an analysis limit, rather than a VPP finding."""
 
     code: str
     message: str
     function: Optional[FunctionIdentity] = None
+    callsite: Optional[SourceSpan] = None
+
+
+@dataclass(frozen=True)
+class ParameterEvidence:
+    """A binding, use, drop or selected condition supporting an assessment."""
+
+    function: FunctionIdentity
+    reason: str
+    detail: str
+    callsite: Optional[SourceSpan] = None
+    target: Optional[FunctionIdentity] = None
+
+
+@dataclass(frozen=True)
+class ParameterAssessment:
+    """Call-specific facts. PCART still chooses and validates any repair."""
+
+    target_api: FunctionIdentity
+    change: ParameterChange
+    call_text: str
+    state: ParameterState
+    reason: str
+    evidence: Tuple[ParameterEvidence, ...] = ()
+    boundaries: Tuple[AnalysisBoundary, ...] = ()
+    resolved_api: Optional[FunctionIdentity] = None
     callsite: Optional[SourceSpan] = None
 
 

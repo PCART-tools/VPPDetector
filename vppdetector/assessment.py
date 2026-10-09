@@ -1,0 +1,755 @@
+"""Narrow call-conditioned assessment of a changed keyword captured by **kwargs.
+
+This is not a Python interpreter or a repair policy. Only finite call binding,
+simple guards and named-key operations with PCResolve evidence are modeled.
+Unsupported control/effects stop the proof, rather than imply compatibility.
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+import tokenize
+from dataclasses import dataclass, field
+from typing import Any, Optional, Sequence, Union
+
+from .core import (
+    AnalysisContext,
+    ResolutionError,
+    _target_status,
+    call_span,
+    direct_calls,
+    identity_from_target,
+)
+from .models import (
+    AnalysisBoundary,
+    CallContext,
+    ChangeKind,
+    FunctionIdentity,
+    ParameterAssessment,
+    ParameterChange,
+    ParameterEvidence,
+    ParameterState,
+    SourceSpan,
+)
+from .scanner import PathLike, ScanSource, _prepare_context, _validate_depth
+from .source import IndexedFunction
+
+_UNKNOWN = object()
+
+
+@dataclass(frozen=True)
+class _Value:
+    literal: Any = _UNKNOWN
+    tracked: bool = False
+
+
+@dataclass
+class _Keywords:
+    items: dict
+    carrier: bool = False
+
+
+def _tracked(value: Any) -> bool:
+    if isinstance(value, _Keywords):
+        return any(_tracked(item) for item in value.items.values())
+    return isinstance(value, _Value) and value.tracked
+
+
+def _finite(node: ast.AST) -> _Value:
+    if isinstance(node, ast.Constant) and type(node.value) in (
+        str,
+        bytes,
+        int,
+        float,
+        bool,
+        type(None),
+    ):
+        return _Value(node.value)
+    return _Value()
+
+
+def _signature(function: IndexedFunction, bound: bool) -> inspect.Signature:
+    args = function.node.args
+    positional = args.posonlyargs + args.args
+    defaults = dict(
+        zip(
+            (node.arg for node in positional[len(positional) - len(args.defaults) :]), args.defaults
+        )
+    )
+    defaults.update(
+        (node.arg, value)
+        for node, value in zip(args.kwonlyargs, args.kw_defaults)
+        if value is not None
+    )
+    parameters = []
+    for nodes, kind in (
+        (args.posonlyargs, inspect.Parameter.POSITIONAL_ONLY),
+        (args.args, inspect.Parameter.POSITIONAL_OR_KEYWORD),
+        ((args.vararg,) if args.vararg else (), inspect.Parameter.VAR_POSITIONAL),
+        (args.kwonlyargs, inspect.Parameter.KEYWORD_ONLY),
+        ((args.kwarg,) if args.kwarg else (), inspect.Parameter.VAR_KEYWORD),
+    ):
+        for node in nodes:
+            if bound and positional and node is positional[0]:
+                continue
+            default = (
+                _finite(defaults[node.arg]) if node.arg in defaults else inspect.Parameter.empty
+            )
+            parameters.append(inspect.Parameter(node.arg, kind, default=default))
+    return inspect.Signature(parameters)
+
+
+class _Stop(Exception):
+    def __init__(self, state: ParameterState, reason: str):
+        self.state, self.reason = state, reason
+
+
+@dataclass
+class _Proof:
+    context: AnalysisContext
+    max_depth: int
+    known_targets: dict = field(default_factory=dict)
+    evidence: list = field(default_factory=list)
+    boundaries: list = field(default_factory=list)
+    handled_reason: Optional[str] = None
+
+    def note(self, function, reason, detail, node=None, target=None):
+        span = (
+            None
+            if node is None
+            else SourceSpan(
+                function.identity.file_path,
+                node.lineno,
+                node.col_offset,
+                node.end_lineno,
+                node.end_col_offset,
+            )
+        )
+        self.evidence.append(ParameterEvidence(function.identity, reason, detail, span, target))
+
+    def unknown(self, function, reason, detail, node=None):
+        self.note(function, reason, detail, node)
+        self.boundaries.append(
+            AnalysisBoundary(reason, detail, function.identity, self.evidence[-1].callsite)
+        )
+        raise _Stop(ParameterState.UNKNOWN, reason)
+
+    def handled(self, function, reason, detail, node=None, target=None):
+        self.note(function, reason, detail, node, target)
+        self.handled_reason = reason
+
+    def bind(self, function, positional, keywords, bound, node=None, *, caller=None, change=None):
+        signature = _signature(function, bound)
+        owner = caller or function
+        slots = [
+            p.name
+            for p in signature.parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+        for name, value in keywords.items():
+            if not _tracked(value):
+                continue
+            parameter = signature.parameters.get(name)
+            if parameter and parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD:
+                if name in slots[: len(positional)]:
+                    self.reject(owner, "duplicate_argument_binding", name, node, function.identity)
+            if (parameter is None or parameter.kind is inspect.Parameter.POSITIONAL_ONLY) and not (
+                function.signature.kwarg
+            ):
+                self.reject(owner, "unexpected_keyword_argument", name, node, function.identity)
+        try:
+            binding = signature.bind(*positional, **keywords)
+        except TypeError as exc:
+            if change and change.kind is ChangeKind.RENAME:
+                try:
+                    partial = signature.bind_partial(*positional, **keywords)
+                except TypeError:
+                    partial = None
+                missing = [
+                    p.name
+                    for p in signature.parameters.values()
+                    if p.default is p.empty
+                    and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+                    and partial is not None
+                    and p.name not in partial.arguments
+                ]
+                if missing == [change.new_name]:
+                    self.reject(
+                        owner,
+                        "required_parameter_unbound",
+                        change.new_name,
+                        node,
+                        function.identity,
+                    )
+            self.unknown(owner, "call_binding_unproven", str(exc), node)
+        binding.apply_defaults()
+        values = dict(binding.arguments)
+        if function.signature.vararg and any(
+            _tracked(item) for item in values.get(function.signature.vararg, ())
+        ):
+            self.unknown(
+                owner, "positional_flow_unsupported", "A tracked value reaches *args.", node
+            )
+        if function.signature.kwarg:
+            values[function.signature.kwarg] = _Keywords(
+                values.get(function.signature.kwarg, {}), carrier=True
+            )
+        return values
+
+    def reject(self, function, reason, detail, node=None, target=None):
+        self.note(function, reason, detail, node, target or function.identity)
+        raise _Stop(ParameterState.REJECTED, reason)
+
+    def run(self, function, values, *, analysis=None, ancestry=(), facts=()):
+        if function.identity in ancestry:
+            self.unknown(function, "recursive_forwarding", "Recursive keyword forwarding.")
+        if len(ancestry) >= self.max_depth:
+            self.unknown(function, "depth_limit", "Keyword propagation depth exhausted.")
+        if isinstance(function.node, ast.AsyncFunctionDef) or any(
+            isinstance(node, (ast.Yield, ast.YieldFrom)) for node in ast.walk(function.node)
+        ):
+            self.unknown(
+                function, "deferred_execution", "Async/generator execution is not modeled."
+            )
+        if function.node.decorator_list:
+            self.unknown(function, "decorated_entry", "Entry/body decoration is not modeled.")
+        try:
+            analysis = analysis or self.context.adapter.analyze(function.identity)
+        except ResolutionError as exc:
+            self.unknown(function, "flow_analysis_failed", str(exc))
+        frame = _Frame(
+            self, function, analysis, values, ancestry + (function.identity,), dict(facts)
+        )
+        frame.statements(function.node.body)
+
+
+@dataclass
+class _Frame:
+    proof: _Proof
+    function: IndexedFunction
+    analysis: Any
+    values: dict
+    ancestry: tuple
+    facts: dict
+    returned: bool = False
+
+    def unknown(self, reason, node):
+        self.proof.unknown(
+            self.function, reason, ast.unparse(node), node if self.analysis is not None else None
+        )
+
+    def related(self, node):
+        return any(
+            isinstance(item, ast.Name)
+            and (
+                _tracked(self.values.get(item.id))
+                or isinstance(self.values.get(item.id), _Keywords)
+                and self.values[item.id].carrier
+            )
+            for item in ast.walk(node)
+        )
+
+    def statements(self, statements):
+        for statement in statements:
+            if self.returned:
+                break
+            if isinstance(statement, ast.Return):
+                result = self.expression(statement.value) if statement.value else _Value(None)
+                if _tracked(result):
+                    self.proof.handled(
+                        self.function, "consumed_value", "Value participates in return.", statement
+                    )
+                self.returned = True
+            elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                result = self.expression(statement.value) if statement.value else _Value()
+                targets = (
+                    statement.targets if isinstance(statement, ast.Assign) else (statement.target,)
+                )
+                for target in targets:
+                    if not isinstance(target, ast.Name):
+                        if self.related(statement) or _tracked(result):
+                            self.unknown("unsupported_assignment", statement)
+                        path = ast.unparse(target)
+                        for name in tuple(self.facts):
+                            if name == path or name.startswith(path + "."):
+                                del self.facts[name]
+                        continue
+                    self.values[target.id] = result
+                    # A reassignment invalidates trusted receiver/parameter facts too.
+                    for name in tuple(self.facts):
+                        if name == target.id or name.startswith(target.id + "."):
+                            del self.facts[name]
+            elif isinstance(statement, ast.Expr):
+                self.expression(statement.value)
+            elif isinstance(statement, ast.If):
+                condition = self.expression(statement.test)
+                truth = self.truth(condition)
+                if truth is None:
+                    abrupt = any(
+                        isinstance(item, (ast.Return, ast.Raise, ast.Break, ast.Continue))
+                        for branch in (*statement.body, *statement.orelse)
+                        for item in ast.walk(branch)
+                    )
+                    if self.related(statement) or abrupt:
+                        self.unknown("unresolved_condition", statement.test)
+                    # Only non-terminating, unrelated branches may be skipped.
+                    for item in ast.walk(statement):
+                        if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store):
+                            self.values[item.id] = _Value()
+                            self.facts.pop(item.id, None)
+                    continue
+                if _tracked(condition):
+                    self.proof.handled(
+                        self.function,
+                        "consumed_presence",
+                        "Parameter controls a guard.",
+                        statement.test,
+                    )
+                self.proof.note(
+                    self.function,
+                    "selected_branch",
+                    f"{ast.unparse(statement.test)}: {truth}",
+                    statement.test,
+                )
+                self.statements(statement.body if truth else statement.orelse)
+            elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                # A definition does not execute its body; captured calls are checked below.
+                if statement.decorator_list or any(
+                    self.related(item)
+                    for item in ast.iter_child_nodes(statement)
+                    if not isinstance(item, ast.stmt)
+                ):
+                    self.unknown("definition_effects_unmodeled", statement)
+                self.values[statement.name] = _Value(tracked=self.related(statement))
+            elif isinstance(statement, ast.Pass):
+                continue
+            else:
+                self.unknown("unsupported_control_flow", statement)
+
+    @staticmethod
+    def truth(value):
+        if isinstance(value, _Keywords):
+            return bool(value.items)
+        if isinstance(value, _Value) and value.literal is not _UNKNOWN:
+            return bool(value.literal)
+        return None
+
+    def expression(self, node):
+        if isinstance(node, ast.Constant):
+            return _finite(node)
+        if isinstance(node, ast.Name):
+            value = self.values.get(node.id, _Value())
+            if node.id in self.facts and isinstance(value, _Value):
+                return _Value(self.facts[node.id], value.tracked)
+            return value
+        if isinstance(node, ast.Attribute):
+            path = ast.unparse(node)
+            if path in self.facts:
+                return _Value(self.facts[path])
+            if self.related(node):
+                self.unknown("unsupported_attribute_use", node)
+            return _Value()
+        if isinstance(node, (ast.Tuple, ast.List)):
+            values = [self.expression(item) for item in node.elts]
+            return _Value(tracked=any(_tracked(item) for item in values))
+        if isinstance(node, ast.Dict):
+            items = {}
+            for key, value in zip(node.keys, node.values):
+                if key is None or not isinstance(key, ast.Constant) or type(key.value) is not str:
+                    self.unknown("dynamic_argument_expansion", node)
+                items[key.value] = self.expression(value)
+            return _Keywords(items)
+        if isinstance(node, ast.Call):
+            return self.call(node)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            value = self.expression(node.operand)
+            truth = self.truth(value)
+            return _Value(not truth if truth is not None else _UNKNOWN, _tracked(value))
+        if isinstance(node, ast.BoolOp):
+            tracked = False
+            for item in node.values:
+                value = self.expression(item)
+                tracked = tracked or _tracked(value)
+                truth = self.truth(value)
+                if truth is None:
+                    return _Value(tracked=tracked)
+                if truth == isinstance(node.op, ast.Or):
+                    return _Value(truth, tracked)
+            return _Value(truth, tracked)
+        if isinstance(node, ast.Compare) and len(node.ops) == 1:
+            left, right = self.expression(node.left), self.expression(node.comparators[0])
+            tracked = _tracked(left) or (not isinstance(right, _Keywords) and _tracked(right))
+            lval = left.literal if isinstance(left, _Value) else _UNKNOWN
+            rval = right.literal if isinstance(right, _Value) else _UNKNOWN
+            operation = node.ops[0]
+            if isinstance(operation, (ast.In, ast.NotIn)) and isinstance(right, _Keywords):
+                if lval is not _UNKNOWN:
+                    present = lval in right.items
+                    tracked = tracked or _tracked(right.items.get(lval))
+                    return _Value(
+                        present if isinstance(operation, ast.In) else not present, tracked
+                    )
+            if lval is not _UNKNOWN and rval is not _UNKNOWN:
+                if isinstance(operation, (ast.Is, ast.IsNot)) and (lval is None or rval is None):
+                    result = lval is rval
+                    return _Value(result if isinstance(operation, ast.Is) else not result, tracked)
+                if isinstance(operation, (ast.Eq, ast.NotEq)):
+                    result = lval == rval
+                    return _Value(result if isinstance(operation, ast.Eq) else not result, tracked)
+            return _Value(tracked=tracked)
+        if self.related(node):
+            self.unknown("unsupported_value_use", node)
+        return _Value()
+
+    def arguments(self, node):
+        positional, keywords = [], {}
+        for argument in node.args:
+            if isinstance(argument, ast.Starred):
+                if not isinstance(argument.value, (ast.Tuple, ast.List)):
+                    self.unknown("dynamic_argument_expansion", argument)
+                positional.extend(self.expression(item) for item in argument.value.elts)
+            else:
+                positional.append(self.expression(argument))
+        for keyword in node.keywords:
+            value = self.expression(keyword.value)
+            items = (
+                {keyword.arg: value}
+                if keyword.arg is not None
+                else (value.items if isinstance(value, _Keywords) else None)
+            )
+            if items is None:
+                self.unknown("dynamic_argument_expansion", keyword.value)
+            for name, item in items.items():
+                if name in keywords:
+                    if _tracked(item) or _tracked(keywords[name]):
+                        self.proof.reject(self.function, "duplicate_argument_binding", name, node)
+                    self.unknown("call_binding_unproven", node)
+                keywords[name] = item
+        return positional, keywords
+
+    def call(self, node):
+        if self.analysis is None:
+            # Client expressions are opaque: no user code, including nested
+            # argument calls, is executed or attributed to the library source.
+            return _Value()
+        facts = next(
+            (
+                call
+                for call in direct_calls(self.analysis, self.function.identity)
+                if (call.lineno, call.col_offset, call.end_lineno, call.end_col_offset)
+                == (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+            ),
+            None,
+        )
+        if isinstance(node.func, ast.Attribute):
+            receiver = self.expression(node.func.value)
+            if isinstance(receiver, _Keywords):
+                if (
+                    node.func.attr == "pop"
+                    and facts
+                    and facts.target_status == "local_container_protocol"
+                ):
+                    positional, keywords = self.arguments(node)
+                    key = (
+                        positional[0].literal
+                        if positional and isinstance(positional[0], _Value)
+                        else _UNKNOWN
+                    )
+                    if (
+                        len(positional) not in (1, 2)
+                        or keywords
+                        or type(key) is not str
+                        or not any(
+                            effect.get("status") == "bounded"
+                            and effect.get("operation") == "pop"
+                            and effect.get("state_after") in {"absent", "conditional"}
+                            and effect.get("element_path") == [key]
+                            for effect in facts.effects
+                        )
+                    ):
+                        self.unknown("mapping_effect_unproven", node)
+                    if key not in receiver.items and len(positional) == 1:
+                        self.unknown("call_binding_unproven", node)
+                    result = receiver.items.pop(
+                        key, positional[1] if len(positional) == 2 else _Value()
+                    )
+                    if _tracked(result):
+                        self.proof.note(self.function, "removed_key", key, node)
+                        if len(positional) == 1:
+                            self.proof.handled(
+                                self.function,
+                                "consumed_presence",
+                                "Required pop uses key presence.",
+                                node,
+                            )
+                    return result
+                if receiver.carrier:
+                    self.unknown("mapping_effect_unproven", node)
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "isinstance"
+            and node.func.id not in self.values
+            and len(node.args) == 2
+            and not node.keywords
+            and facts
+            and facts.target is None
+            and facts.target_status == "builtin_boundary"
+            and "isinstance"
+            not in self.proof.context.index.imports.get(self.function.identity.module, {})
+        ):
+            return self.instance_guard(node)
+        if self.related(node.func):
+            self.unknown("call_target_unproven", node)
+        positional, keywords = self.arguments(node)
+        if any(
+            isinstance(item, _Keywords) and item.carrier
+            for item in positional + list(keywords.values())
+        ):
+            self.unknown("ordinary_container_argument", node)
+        captured = facts and any(
+            source.get("source") == self.function.signature.kwarg
+            for binding in facts.capture_bindings
+            for source in binding.get("sources", ())
+        )
+        if (
+            not any(_tracked(item) for item in positional + list(keywords.values()))
+            and not captured
+        ):
+            return _Value()
+        if not facts or not facts.target or captured:
+            self.unknown("call_target_unproven", node)
+        status = _target_status(self.analysis, facts)
+        confirmed = self.proof.known_targets.get(call_span(facts))
+        if confirmed is not None:
+            confirmed_definition = self.proof.context.index.find(confirmed)
+            if (
+                confirmed_definition is None
+                or confirmed_definition.identity != identity_from_target(facts.target)
+            ):
+                self.unknown("conflicting_target_fact", node)
+            self.proof.note(
+                self.function,
+                "confirmed_call_target",
+                "Caller supplied this call's source implementation.",
+                node,
+                confirmed,
+            )
+        reasons = {
+            boundary.get("reason")
+            for boundary in self.analysis.boundaries
+            if boundary.get("call_id") == facts.id
+        }
+        dynamic = {reason for reason in reasons if reason and reason.startswith("dynamic_")}
+        dynamic.discard("dynamic_argument_expansion")
+        if confirmed is not None:
+            # A method observation resolves this target only, not decorator
+            # effects, metaclass construction, binding or later body behavior.
+            dynamic.discard("dynamic_class_receiver_override_possible")
+        if status not in {"resolved", "constructor", "staticmethod", "classmethod"} or dynamic:
+            reason = sorted(dynamic)[0] if dynamic else "call_target_unproven"
+            self.unknown(reason, node)
+        if status == "classmethod" and confirmed is None:
+            self.unknown("class_receiver_unconfirmed", node)
+        if any(
+            boundary.get("call_id") == facts.id
+            and boundary.get("reason")
+            in {
+                "identity_decorator_effects_unmodeled",
+                "dynamic_dispatch",
+                "dynamic_callable_binding",
+            }
+            for boundary in self.analysis.boundaries
+        ):
+            self.unknown("callee_effects_unmodeled", node)
+        target = self.proof.context.index.find(identity_from_target(facts.target))
+        if target is None:
+            self.unknown("call_target_unavailable", node)
+        values = self.proof.bind(
+            target, positional, keywords, target.is_bound_method, node, caller=self.function
+        )
+        captured_keywords = values.get(target.signature.kwarg)
+        if isinstance(captured_keywords, _Keywords) and _tracked(captured_keywords):
+            self.proof.note(
+                self.function, "forwarded_keyword", ast.unparse(node), node, target.identity
+            )
+            try:
+                expanded = self.proof.context.adapter.expand(self.analysis, facts.id)
+            except ResolutionError as exc:
+                self.proof.unknown(self.function, "flow_expansion_failed", str(exc), node)
+            self.proof.run(target, values, analysis=expanded, ancestry=self.ancestry)
+        else:
+            self.proof.handled(
+                self.function,
+                "accepted_binding",
+                "Changed value binds an explicit parameter.",
+                node,
+                target.identity,
+            )
+        return _Value()
+
+    def instance_guard(self, node):
+        value = self.expression(node.args[0])
+        if not isinstance(value, _Value) or value.literal is _UNKNOWN:
+            return _Value(tracked=_tracked(value))
+        expression = ast.unparse(node.args[1])
+        classes = self.proof.context.index
+        identity = classes._definitions().resolve_name(
+            self.function.identity.module,
+            self.function.identity.qualname,
+            expression,
+            classes.imports,
+            kind="class",
+        )
+        if identity and identity.file_path:
+            # A primitive cannot be an instance of a plain source class. Custom
+            # metaclasses/inherited instance checks deliberately remain unknown.
+            try:
+                with tokenize.open(identity.file_path) as stream:
+                    tree = ast.parse(stream.read())
+            except (OSError, SyntaxError, UnicodeError):
+                return _Value()
+            matching = [
+                item
+                for item in ast.walk(tree)
+                if isinstance(item, ast.ClassDef) and item.lineno == identity.lineno
+            ]
+            if (
+                len(matching) == 1
+                and not matching[0].keywords
+                and not matching[0].decorator_list
+                and all(
+                    isinstance(base, ast.Name) and base.id == "object" for base in matching[0].bases
+                )
+                and not any(
+                    isinstance(item, ast.Name)
+                    and item.id == "object"
+                    and isinstance(item.ctx, ast.Store)
+                    or isinstance(item, (ast.FunctionDef, ast.ClassDef))
+                    and item.name == "object"
+                    for item in ast.walk(tree)
+                )
+                and "object" not in classes.imports.get(identity.module, {})
+            ):
+                return _Value(False, value.tracked)
+        return _Value(tracked=value.tracked)
+
+
+def _parse_call(call: CallContext) -> Optional[ast.Call]:
+    if isinstance(call.expression, ast.Call):
+        return call.expression
+    try:
+        node = ast.parse(call.expression, mode="eval").body
+    except (SyntaxError, TypeError):
+        return None
+    if isinstance(node, ast.Await):
+        node = node.value
+    return node if isinstance(node, ast.Call) else None
+
+
+def assess_change(
+    source: ScanSource,
+    target_api: FunctionIdentity,
+    change: ParameterChange,
+    call: Union[str, ast.Call, CallContext],
+    *,
+    import_roots: Optional[Sequence[PathLike]] = None,
+    max_depth: int = 5,
+    context: Optional[AnalysisContext] = None,
+) -> ParameterAssessment:
+    """Assess one changed keyword under one original call's finite conditions.
+
+    HANDLED/IGNORED are handling facts, not old/new behavior equivalence.
+    REJECTED supplies parameter-specific evidence, not a patch or proof that a
+    proposed patch works. UNKNOWN never means that the parameter is compatible.
+    The initial scope does not model positional elements or exception recovery.
+    """
+
+    _validate_depth(max_depth)
+    call = call if isinstance(call, CallContext) else CallContext(call)
+    node = _parse_call(call)
+    text = ast.unparse(node) if node else str(call.expression)
+    _, context = _prepare_context(source, import_roots, context)
+    entry = None
+    proof = _Proof(context, max_depth, dict(call.known_targets))
+    state, reason = ParameterState.UNKNOWN, "target_api_unavailable"
+    try:
+        if context is None:
+            raise ResolutionError("No Python sources available.")
+        entry = context.resolve_api(target_api)
+        if entry is None or entry.is_overload:
+            raise ResolutionError("The API does not resolve to one source implementation.")
+        if node is None:
+            proof.unknown(
+                entry, "callsite_not_resolved", "Supply an original call AST or expression."
+            )
+        # The client expression is not in the library AST. Only finite argument
+        # syntax is read; calls/attributes in its argument values are never run.
+        frame = _Frame(proof, entry, None, {}, (), {})
+        positional, keywords = frame.arguments(node)
+        if change.old_position is not None and change.old_name not in keywords:
+            proof.unknown(
+                entry,
+                "positional_change_unsupported",
+                "Positional element assessment is not modeled.",
+            )
+        if change.old_name not in keywords:
+            proof.unknown(
+                entry, "changed_argument_not_passed", "The selected keyword is not supplied."
+            )
+        original = keywords[change.old_name]
+        if not isinstance(original, _Value):
+            proof.unknown(
+                entry,
+                "changed_value_unsupported",
+                "Only primitive/unknown scalar arguments are modeled.",
+            )
+        keywords[change.old_name] = _Value(original.literal, tracked=True)
+        if not entry.signature.kwarg or change.old_name in (
+            *entry.signature.positional_or_keyword,
+            *entry.signature.keyword_only,
+        ):
+            proof.unknown(
+                entry, "not_variadic_capture", "The changed keyword is not captured by **kwargs."
+            )
+        values = proof.bind(
+            entry,
+            positional,
+            keywords,
+            entry.is_bound_method if call.bound_receiver is None else call.bound_receiver,
+            change=change,
+        )
+        receiver = (entry.node.args.posonlyargs + entry.node.args.args)[:1]
+        receiver_name = receiver[0].arg if receiver and entry.is_bound_method else None
+        for name, value in call.known_values:
+            if name in values and isinstance(values[name], _Value):
+                known = values[name].literal
+                if known is not _UNKNOWN and (type(known) is not type(value) or known != value):
+                    proof.unknown(entry, "conflicting_call_facts", f"Conflicting fact for {name}.")
+            elif not (receiver_name and name.startswith(receiver_name + ".")):
+                proof.unknown(entry, "unsupported_call_fact", f"No supported binding for {name}.")
+        proof.note(
+            entry, "entry_binding", f"{change.old_name} captured by {entry.signature.kwarg}."
+        )
+        proof.run(entry, values, facts=call.known_values)
+        state = ParameterState.HANDLED if proof.handled_reason else ParameterState.IGNORED
+        reason = proof.handled_reason or "unused_parameter"
+        if state is ParameterState.IGNORED:
+            proof.note(
+                entry, reason, "Supported executed paths do not use the value or key presence."
+            )
+    except _Stop as outcome:
+        state, reason = outcome.state, outcome.reason
+    except ResolutionError as exc:
+        proof.boundaries.append(AnalysisBoundary(reason, str(exc), target_api))
+    return ParameterAssessment(
+        target_api,
+        change,
+        text,
+        state,
+        reason,
+        tuple(proof.evidence),
+        tuple(proof.boundaries),
+        entry.identity if entry else None,
+        call.callsite,
+    )
