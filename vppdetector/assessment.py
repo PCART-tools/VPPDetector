@@ -1,7 +1,8 @@
-"""Narrow call-conditioned assessment of a changed keyword captured by **kwargs.
+"""Narrow call-conditioned assessment of one variadically captured argument.
 
 This is not a Python interpreter or a repair policy. Only finite call binding,
-simple guards and named-key operations with PCResolve evidence are modeled.
+simple guards, finite sequence operations and named-key operations with
+PCResolve evidence are modeled.
 Unsupported control/effects stop the proof, rather than imply compatibility.
 """
 
@@ -51,9 +52,18 @@ class _Keywords:
     carrier: bool = False
 
 
+@dataclass(frozen=True)
+class _Positionals:
+    items: tuple
+    carrier: bool = False
+    kind: str = "tuple"
+
+
 def _tracked(value: Any) -> bool:
     if isinstance(value, _Keywords):
         return any(_tracked(item) for item in value.items.values())
+    if isinstance(value, _Positionals):
+        return any(_tracked(item) for item in value.items)
     return isinstance(value, _Value) and value.tracked
 
 
@@ -148,6 +158,21 @@ class _Proof:
             for p in signature.parameters.values()
             if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
         ]
+        for position, value in enumerate(positional):
+            if not _tracked(value):
+                continue
+            if position >= len(slots) and not function.signature.vararg:
+                self.reject(
+                    owner,
+                    "too_many_positional_arguments",
+                    f"Selected value reaches positional slot {position}; capacity is {len(slots)}.",
+                    node,
+                    function.identity,
+                )
+            if position < len(slots) and slots[position] in keywords:
+                self.reject(
+                    owner, "duplicate_argument_binding", slots[position], node, function.identity
+                )
         for name, value in keywords.items():
             if not _tracked(value):
                 continue
@@ -186,11 +211,9 @@ class _Proof:
             self.unknown(owner, "call_binding_unproven", str(exc), node)
         binding.apply_defaults()
         values = dict(binding.arguments)
-        if function.signature.vararg and any(
-            _tracked(item) for item in values.get(function.signature.vararg, ())
-        ):
-            self.unknown(
-                owner, "positional_flow_unsupported", "A tracked value reaches *args.", node
+        if function.signature.vararg:
+            values[function.signature.vararg] = _Positionals(
+                tuple(values.get(function.signature.vararg, ())), carrier=True
             )
         if function.signature.kwarg:
             values[function.signature.kwarg] = _Keywords(
@@ -204,9 +227,9 @@ class _Proof:
 
     def run(self, function, values, *, analysis=None, ancestry=(), facts=()):
         if function.identity in ancestry:
-            self.unknown(function, "recursive_forwarding", "Recursive keyword forwarding.")
+            self.unknown(function, "recursive_forwarding", "Recursive variadic forwarding.")
         if len(ancestry) >= self.max_depth:
-            self.unknown(function, "depth_limit", "Keyword propagation depth exhausted.")
+            self.unknown(function, "depth_limit", "Argument propagation depth exhausted.")
         if isinstance(function.node, ast.AsyncFunctionDef) or any(
             isinstance(node, (ast.Yield, ast.YieldFrom)) for node in ast.walk(function.node)
         ):
@@ -245,7 +268,7 @@ class _Frame:
             isinstance(item, ast.Name)
             and (
                 _tracked(self.values.get(item.id))
-                or isinstance(self.values.get(item.id), _Keywords)
+                or isinstance(self.values.get(item.id), (_Keywords, _Positionals))
                 and self.values[item.id].carrier
             )
             for item in ast.walk(node)
@@ -426,7 +449,7 @@ class _Frame:
 
     @staticmethod
     def truth(value):
-        if isinstance(value, _Keywords):
+        if isinstance(value, (_Keywords, _Positionals)):
             return bool(value.items)
         if isinstance(value, _Value) and value.literal is not _UNKNOWN:
             return bool(value.literal)
@@ -448,8 +471,24 @@ class _Frame:
                 self.unknown("unsupported_attribute_use", node)
             return _Value()
         if isinstance(node, (ast.Tuple, ast.List)):
-            values = [self.expression(item) for item in node.elts]
-            return _Value(tracked=any(_tracked(item) for item in values))
+            return _Positionals(
+                tuple(self.positional_items(node.elts)),
+                kind="tuple" if isinstance(node, ast.Tuple) else "list",
+            )
+        if isinstance(node, ast.Subscript):
+            value = self.expression(node.value)
+            if isinstance(value, _Positionals):
+                return self.positional_projection(value, node)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = self.expression(node.left), self.expression(node.right)
+            if (
+                isinstance(left, _Positionals)
+                and isinstance(right, _Positionals)
+                and left.kind == right.kind
+            ):
+                return _Positionals(
+                    left.items + right.items, left.carrier or right.carrier, left.kind
+                )
         if isinstance(node, ast.Dict):
             items = {}
             for key, value in zip(node.keys, node.values):
@@ -499,15 +538,45 @@ class _Frame:
             self.unknown("unsupported_value_use", node)
         return _Value()
 
-    def arguments(self, node):
-        positional, keywords = [], {}
-        for argument in node.args:
+    def positional_items(self, nodes):
+        positional = []
+        for argument in nodes:
             if isinstance(argument, ast.Starred):
-                if not isinstance(argument.value, (ast.Tuple, ast.List)):
+                value = self.expression(argument.value)
+                if not isinstance(value, _Positionals):
                     self.unknown("dynamic_argument_expansion", argument)
-                positional.extend(self.expression(item) for item in argument.value.elts)
+                positional.extend(value.items)
             else:
                 positional.append(self.expression(argument))
+        return positional
+
+    def positional_projection(self, value, node):
+        def index(item):
+            if item is None:
+                return None
+            if isinstance(item, ast.Constant) and type(item.value) is int:
+                return item.value
+            if (
+                isinstance(item, ast.UnaryOp)
+                and isinstance(item.op, (ast.USub, ast.UAdd))
+                and isinstance(item.operand, ast.Constant)
+                and type(item.operand.value) is int
+            ):
+                return -item.operand.value if isinstance(item.op, ast.USub) else item.operand.value
+            self.unknown("positional_projection_unproven", node)
+
+        try:
+            if isinstance(node.slice, ast.Slice):
+                selection = slice(
+                    index(node.slice.lower), index(node.slice.upper), index(node.slice.step)
+                )
+                return _Positionals(value.items[selection], value.carrier, value.kind)
+            return value.items[index(node.slice)]
+        except (IndexError, TypeError, ValueError):
+            self.unknown("positional_projection_unproven", node)
+
+    def arguments(self, node):
+        positional, keywords = self.positional_items(node.args), {}
         for keyword in node.keywords:
             value = self.expression(keyword.value)
             items = (
@@ -600,12 +669,17 @@ class _Frame:
             self.unknown("call_target_unproven", node)
         positional, keywords = self.arguments(node)
         if any(
-            isinstance(item, _Keywords) and item.carrier
+            isinstance(item, _Keywords)
+            and item.carrier
+            or isinstance(item, _Positionals)
+            and _tracked(item)
             for item in positional + list(keywords.values())
         ):
             self.unknown("ordinary_container_argument", node)
         captured = facts and any(
-            source.get("source") == self.function.signature.kwarg
+            source.get("source") is not None
+            and source.get("source")
+            in {self.function.signature.kwarg, self.function.signature.vararg}
             for binding in facts.capture_bindings
             for source in binding.get("sources", ())
         )
@@ -666,9 +740,14 @@ class _Frame:
             target, positional, keywords, target.is_bound_method, node, caller=self.function
         )
         captured_keywords = values.get(target.signature.kwarg)
-        if isinstance(captured_keywords, _Keywords) and _tracked(captured_keywords):
+        captured_positionals = values.get(target.signature.vararg)
+        if _tracked(captured_keywords) or _tracked(captured_positionals):
             self.proof.note(
-                self.function, "forwarded_keyword", ast.unparse(node), node, target.identity
+                self.function,
+                "forwarded_positional" if _tracked(captured_positionals) else "forwarded_keyword",
+                ast.unparse(node),
+                node,
+                target.identity,
             )
             try:
                 expanded = self.proof.context.adapter.expand(self.analysis, facts.id)
@@ -754,14 +833,15 @@ def assess_change(
     max_depth: int = 5,
     context: Optional[AnalysisContext] = None,
 ) -> ParameterAssessment:
-    """Assess one changed keyword under one original call's finite conditions.
+    """Assess one changed captured argument under finite original-call conditions.
 
     Results may be conditional on recorded normal-path preconditions for
     unrelated, error-only guards; those records do not infer a receiver value.
     HANDLED/IGNORED are handling facts, not old/new behavior equivalence.
     REJECTED supplies parameter-specific evidence, not a patch or proof that a
     proposed patch works. UNKNOWN never means that the parameter is compatible.
-    The initial scope does not model positional elements or exception recovery.
+    Positional selection uses old_position in the expanded client argument list,
+    excluding an implicit receiver. Exception recovery remains unmodeled.
     """
 
     _validate_depth(max_depth)
@@ -786,36 +866,57 @@ def assess_change(
         # syntax is read; calls/attributes in its argument values are never run.
         frame = _Frame(proof, entry, None, {}, (), {})
         positional, keywords = frame.arguments(node)
-        if change.old_position is not None and change.old_name not in keywords:
-            proof.unknown(
-                entry,
-                "positional_change_unsupported",
-                "Positional element assessment is not modeled.",
+        bound = entry.is_bound_method if call.bound_receiver is None else call.bound_receiver
+        if change.old_name in keywords:
+            original = keywords[change.old_name]
+            capture = entry.signature.kwarg
+            if not capture or change.old_name in (
+                *entry.signature.positional_or_keyword,
+                *entry.signature.keyword_only,
+            ):
+                proof.unknown(
+                    entry,
+                    "not_variadic_capture",
+                    "The changed keyword is not captured by **kwargs.",
+                )
+            destination = f"{capture}[{change.old_name!r}]"
+        elif change.old_position is not None:
+            position = change.old_position
+            if position >= len(positional):
+                proof.unknown(
+                    entry, "changed_argument_not_passed", "The selected position is absent."
+                )
+            original = positional[position]
+            signature = _signature(entry, bound)
+            fixed = sum(
+                parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
+                for parameter in signature.parameters.values()
             )
-        if change.old_name not in keywords:
+            capture = entry.signature.vararg
+            if not capture or position < fixed:
+                proof.unknown(
+                    entry, "not_variadic_capture", "The changed element is not captured by *args."
+                )
+            destination = f"{capture}[{position - fixed}] (client position {position})"
+        else:
             proof.unknown(
                 entry, "changed_argument_not_passed", "The selected keyword is not supplied."
             )
-        original = keywords[change.old_name]
         if not isinstance(original, _Value):
             proof.unknown(
                 entry,
                 "changed_value_unsupported",
                 "Only primitive/unknown scalar arguments are modeled.",
             )
-        keywords[change.old_name] = _Value(original.literal, tracked=True)
-        if not entry.signature.kwarg or change.old_name in (
-            *entry.signature.positional_or_keyword,
-            *entry.signature.keyword_only,
-        ):
-            proof.unknown(
-                entry, "not_variadic_capture", "The changed keyword is not captured by **kwargs."
-            )
+        if change.old_name in keywords:
+            keywords[change.old_name] = _Value(original.literal, tracked=True)
+        else:
+            positional[change.old_position] = _Value(original.literal, tracked=True)
         values = proof.bind(
             entry,
             positional,
             keywords,
-            entry.is_bound_method if call.bound_receiver is None else call.bound_receiver,
+            bound,
             change=change,
         )
         receiver = (entry.node.args.posonlyargs + entry.node.args.args)[:1]
@@ -827,15 +928,13 @@ def assess_change(
                     proof.unknown(entry, "conflicting_call_facts", f"Conflicting fact for {name}.")
             elif not (receiver_name and name.startswith(receiver_name + ".")):
                 proof.unknown(entry, "unsupported_call_fact", f"No supported binding for {name}.")
-        proof.note(
-            entry, "entry_binding", f"{change.old_name} captured by {entry.signature.kwarg}."
-        )
+        proof.note(entry, "entry_binding", f"{change.old_name} captured by {destination}.")
         proof.run(entry, values, facts=call.known_values)
         state = ParameterState.HANDLED if proof.handled_reason else ParameterState.IGNORED
         reason = proof.handled_reason or "unused_parameter"
         if state is ParameterState.IGNORED:
             proof.note(
-                entry, reason, "Supported executed paths do not use the value or key presence."
+                entry, reason, "Supported executed paths do not use the value or argument presence."
             )
     except _Stop as outcome:
         state, reason = outcome.state, outcome.reason

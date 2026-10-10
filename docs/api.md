@@ -164,9 +164,23 @@ returns a `ParameterAssessment`.
 | `call` | Original call expression, `ast.Call` or `CallContext`. |
 
 A `ParameterChange` includes `old_name`; a rename also requires `new_name`.
-Its optional `old_position` is a nonnegative integer. Current assessment
-focuses on changed keywords captured by `**kwargs`; positional-element
-assessment remains an analysis boundary.
+Its optional `old_position` selects a zero-based position in the original
+call's expanded positional argument list. An implicit method receiver is not
+part of that list; an explicitly supplied receiver in an unbound call is.
+The caller supplies this position; assessment does not infer it from versions
+or parameter names.
+
+An explicitly supplied `old_name` selects keyword assessment through
+`**kwargs`, even when position metadata is present. Otherwise, `old_position`
+selects an element captured by the new implementation's `*args`. A position
+still bound to an explicit new parameter, an absent position or an unknown
+expansion remains unresolved.
+
+Finite tuple/list expansions, aliases, constant indices and slices, and
+same-kind sequence concatenation retain element order. For example, with
+`forward(*args)` calling `target(first=0)`, `forward(7)` handles element zero;
+`forward(7, 9)` rejects element one. The structural forwarding pattern alone
+does not determine either result.
 
 ```python
 from pathlib import Path

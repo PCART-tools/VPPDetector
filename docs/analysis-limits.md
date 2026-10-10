@@ -111,10 +111,19 @@ modification succeeds.
 
 ### Assessment coverage
 
-Current assessment covers changed keywords captured by `**kwargs`, regardless
-of the container's name. Supported cases include direct/alias forwarding,
-finite expansions, bounded `pop` effects, simple literal/default-value guards
-and source-resolved downstream binding.
+Current assessment covers changed keywords captured by `**kwargs` and selected
+positional elements captured by `*args`, regardless of the container's name.
+Supported cases include direct/alias forwarding, finite expansions, bounded
+`pop` effects, simple literal/default-value guards and source-resolved
+downstream binding.
+
+Positional assessment preserves finite sequence order through constant indices,
+slices, same-kind concatenation and expansion. Rejection requires the selected
+value to reach a slot beyond a callee's positional capacity or another supported
+parameter-specific binding conflict. An error caused only by another supplied
+element does not license rejecting the selected one. Unknown-length expansions,
+sequence unpacking, ordinary-container helper calls and unsupported mutations
+remain boundaries rather than assumptions about argument acceptance.
 
 ### Normal-path preconditions
 
@@ -131,10 +140,10 @@ message, and source-known custom receiver getters are not bypassed. Results
 with preconditions describe argument handling on the normal path, not proof
 that a particular invocation reaches it.
 
-Positional-element propagation, exception recovery, unknown mutation, deferred
-execution and unsupported transformations remain explicit boundaries.
-An absent selected keyword or a keyword not captured by the target's variadic
-parameter also yields an unresolved assessment.
+Exception recovery, unknown mutation, deferred execution and unsupported
+transformations remain explicit boundaries. An absent selected argument or one
+not captured by the target's corresponding variadic parameter also yields an
+unresolved assessment.
 
 ### Supplied call facts
 
