@@ -16,22 +16,17 @@ limits are recorded separately in `boundaries`; an empty findings collection
 means no VPP was detected within the supported analysis, rather than proof
 that all dynamic Python behavior is compatible.
 
-VPPDetector uses PCResolve for program facts and call resolution. API matching,
-parameter-change detection, repair selection and repair verification belong
-to PCART. A separate `assess_change()` interface supplies call-specific handling
-facts for one already identified parameter change; it does not produce patches.
-The repository remains a research scanner and an incubation area for later
-PCART integration. Formal PCART integration has not shipped, and there is no
-separate PyPI release.
+VPPDetector uses PCResolve for program facts and call resolution.
+`assess_change()` analyzes how one already identified parameter deletion or
+rename is handled for a specific call, returning handling states and evidence.
 
 ## Requirements
 
 - Python 3.9 or newer
 - PCResolve newer than 1.0.7 (`pcresolve>1.0.7`)
 
-The analyzer requires callable, container and incoming-context facts introduced
-after PCResolve's `v1.0.7` tag. No Git revision is pinned; pip selects a
-compatible release newer than 1.0.7.
+PCResolve supplies the callable, container and incoming-context facts used by
+the analyzer.
 
 From this checkout, install the package in editable mode:
 
@@ -41,9 +36,7 @@ python -m pip install -e .
 
 This installs PCResolve and the other declared dependencies.
 PCResolve runs in the analyzer's Python environment; the analyzed library does
-not need to be installed or imported. Until a PCResolve release newer than
-1.0.7 is available on the package index, this installation command cannot
-resolve the dependency.
+not need to be installed or imported.
 
 ## Minimal example
 
@@ -74,8 +67,8 @@ def consumed(**kwargs):
 The scan examples below detect `wrapper` forwarding `**kwargs` to the fixed
 signature of `target`. Parameter-level analysis distinguishes
 `wrapper(obsolete=7)` (`rejected`) from `wrapper(allowed=7)` (`handled`) and
-`consumed(obsolete=7)` (`handled`). The change itself is supplied by the caller;
-VPPDetector does not compare library versions to discover it.
+`consumed(obsolete=7)` (`handled`). The caller supplies the identified parameter
+change as an input to the assessment.
 
 ## Whole-package scan
 
@@ -108,12 +101,12 @@ to JSON. Important fields are:
 | Field | Meaning |
 | --- | --- |
 | `has_vpp` | Whether at least one structural finding was detected. |
-| `functions_scanned` | Indexed, non-overload function entries considered in this scope; not a count of proven-safe APIs. |
+| `functions_scanned` | Indexed, non-overload function entries considered in this scope. |
 | `variadic_functions` | Entries with `*args` or `**kwargs`. |
 | `findings` | Root API, variadic channel, downstream signature, source locations and forwarding path. |
 | `boundaries` | Unresolved targets, unsupported effects and other analysis limits; these are not findings. |
 | `target_api` / `resolved_api` | Requested and resolved implementation identities for an on-demand scan; absent for a whole-package scan. |
-| `analyzer_schema_version` | PCResolve program-fact schema version, not a VPPDetector JSON-format version. |
+| `analyzer_schema_version` | PCResolve program-fact schema version. |
 
 Each finding and path step retains `target_status`. A source candidate is not
 necessarily an exact runtime target, so `has_vpp` is not a client-call failure
@@ -180,8 +173,7 @@ multiple APIs from the same library version. Both scan functions accept
 the requested API to its source implementation; findings retain the requested
 API identity and the path retains implementation identities.
 
-When the implementation file is known, prepare a smaller context without
-depending on any particular API-mapping tool:
+When the implementation file is known, prepare a smaller context:
 
 ```python
 from pathlib import Path
@@ -203,7 +195,7 @@ full-source preparation. File/name/line conflicts are not resolved by guessing;
 unavailable implementations and unproven downstream calls remain boundaries.
 Dynamic dependencies are not inferred, and an import closure is not proof of
 complete runtime coverage. Module names are derived from `SourceContext`'s import
-roots, not from PCART-specific metadata or files.
+roots.
 
 An API-scoped context cannot be used for `scan_package()`; use `from_source()`
 for whole-library scanning. Reuse a context only for definitions/dependencies
@@ -245,12 +237,9 @@ When PCResolve proves a decorated callable's identity but leaves its effects
 unmodeled, the scanner does not use that callee's body to prove container returns
 or further forwarding. Direct expansion findings against its nominal signature
 retain the effects diagnostic; they do not assert that decoration was effect-free.
-Source-candidate paths retain their target status: a finding does not establish
-exact runtime dispatch or prove that a particular client call will fail.
-
-Structural findings alone are not permission to delete or rename an argument:
-a fixed downstream signature may still accept that particular name, or the
-library may consume its value before forwarding the remaining keywords.
+Use `assess_change()` to examine a particular changed argument: a fixed
+downstream signature may still accept its name, or the library may consume its
+value before forwarding the remaining keywords.
 
 ### Parameter-level assessment
 
@@ -287,18 +276,20 @@ or rename, and the original call expression or `ast.Call`. Results are ordinary
 Python objects with binding/use/path evidence and analysis boundaries:
 
 - `HANDLED`: the argument's value or presence is used, or its value binds to a
-  downstream explicit parameter. This is not a guarantee of behavior equivalence.
+  downstream explicit parameter.
 - `REJECTED`: the supported call conditions lead to a parameter-specific binding
-  rejection. PCART still has to generate and verify a repair candidate.
+  rejection.
 - `IGNORED`: the supported executed paths do not use the argument's value or
-  presence. Ignoring an argument is not itself permission to delete it.
+  presence.
 - `UNKNOWN`: binding, control flow, dispatch or effects prevent a definite result.
 
 `ParameterAssessment` retains `target_api`, `resolved_api`, `change` and the
 original `call_text`. Its `state` is a `ParameterState` enum (serialized values
 are `handled`, `rejected`, `ignored`, `unknown`); `reason` explains the outcome,
 `evidence` records supporting bindings/uses/paths, and `boundaries` records
-analysis limits. These are argument-handling facts, not a repair instruction.
+analysis limits. The states describe argument handling under the supplied call
+conditions; behavioral equivalence and code modification are outside this
+analysis.
 
 The initial scope covers changed keywords captured by `**kwargs` (regardless of
 the container's name), direct/alias forwarding, finite expansions, bounded `pop`
@@ -316,10 +307,9 @@ uncertain class dispatch remains `UNKNOWN` without independent evidence.
 The analyzer never executes client argument expressions or loads runtime object
 graphs. Context caches retain program facts, not API-only assessment decisions.
 
-These facts are intended to refine PCART's variadic preservation rule per
-changed argument, not for the entire `*args`/`**kwargs` channel. API evolution
-facts stay intact; PCART owns final compatibility decisions, candidate
-operations and whole-call verification. No separate assessment CLI is provided.
+Each assessment applies to the selected changed argument in the supplied call.
+Use the Python interface for parameter-level assessment and the CLI for
+whole-package scanning.
 
 ## Source layout
 
@@ -334,15 +324,12 @@ operations and whole-call verification. No separate assessment CLI is provided.
 | `vppdetector/assessment.py` | Call-specific analysis of one already identified parameter change. |
 | `vppdetector/encoding.py` | Retained encoding helper; source indexing uses Python's declared source encoding. |
 
-The shared analyzer does not read PCART configuration or API-mapping artifacts.
-A future PCART adapter will translate those inputs into these Python models and
-consume returned objects; JSON is not required between the two tools.
-
 ## Version 1.0 research scanner
 
-The original implementation is retained in `legacy_vppdetector.py`; it
-depends on PCART internals and contains dataset-specific paths. It is no longer
-the default `vppdetector.py` entry point.
+The original implementation is retained in `legacy_vppdetector.py` for
+reproducibility. It requires the original `Path.getPath` and `Tool.tool` helper
+modules and contains dataset-specific paths. The current scan entry point is
+`vppdetector.py`.
 
 Historical outputs under `APIDefWithVariadicPara/` and
 `VariadicParaPitfalls/` are unchanged. They contain the original scanner's

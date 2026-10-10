@@ -37,7 +37,7 @@ class ParameterState(StringEnum):
 
 @dataclass(frozen=True)
 class ParameterChange:
-    """One evolution fact already selected by the caller (normally PCART)."""
+    """One parameter deletion or rename supplied by the caller."""
 
     kind: ChangeKind
     old_name: str
@@ -144,7 +144,7 @@ class ParameterEvidence:
 
 @dataclass(frozen=True)
 class ParameterAssessment:
-    """Call-specific facts. PCART still chooses and validates any repair."""
+    """Handling state and supporting evidence for one changed argument in a call."""
 
     target_api: FunctionIdentity
     change: ParameterChange
