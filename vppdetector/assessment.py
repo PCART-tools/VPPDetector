@@ -8,6 +8,7 @@ Unsupported control/effects stop the proof, rather than imply compatibility.
 from __future__ import annotations
 
 import ast
+import builtins
 import inspect
 import tokenize
 from dataclasses import dataclass, field
@@ -250,6 +251,100 @@ class _Frame:
             for item in ast.walk(node)
         )
 
+    def simple_guard_read(self, node):
+        """Accept finite-model reads, not calls, projections or known getters."""
+
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return self.simple_guard_read(node.operand)
+        if isinstance(node, ast.Name):
+            value = self.values.get(node.id)
+            return isinstance(value, _Value) and not value.tracked
+        if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+            return False
+        positional = self.function.node.args.posonlyargs + self.function.node.args.args
+        if (
+            not self.function.is_bound_method
+            or not positional
+            or node.value.id != positional[0].arg
+            or node.value.id in self.values
+        ):
+            return False
+        owner = self.function.identity.qualname.rpartition(".")[0]
+        names = {owner + "." + name for name in (node.attr, "__getattribute__", "__getattr__")}
+        return not any(
+            function.identity.module == self.function.identity.module
+            and function.identity.qualname in names
+            for function in self.proof.context.index.functions
+        )
+
+    def normal_path_guard(self, statement):
+        """Record an unrelated error-only guard without inventing its value."""
+
+        if self.related(statement) or not self.simple_guard_read(statement.test):
+            return False
+        for exceptional, normal, required in (
+            (statement.body, statement.orelse, False),
+            (statement.orelse, statement.body, True),
+        ):
+            if len(exceptional) != 1 or any(not isinstance(item, ast.Pass) for item in normal):
+                continue
+            raised = exceptional[0]
+            if not isinstance(raised, ast.Raise) or raised.cause is not None:
+                continue
+            call = raised.exc
+            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+                continue
+            exception = getattr(builtins, call.func.id, None)
+            if (
+                not isinstance(exception, type)
+                or not issubclass(exception, Exception)
+                or call.keywords
+                or any(not isinstance(item, ast.Constant) for item in call.args)
+                or not self.unshadowed_error_name(call.func.id)
+            ):
+                continue
+            edge = next(
+                (
+                    edge
+                    for edge in direct_calls(self.analysis, self.function.identity)
+                    if (edge.lineno, edge.col_offset, edge.end_lineno, edge.end_col_offset)
+                    == (call.lineno, call.col_offset, call.end_lineno, call.end_col_offset)
+                ),
+                None,
+            )
+            if edge is None or edge.target is not None or edge.target_status != "builtin_boundary":
+                continue
+            test = ast.unparse(statement.test)
+            condition = f"({test})" if required else f"not ({test})"
+            self.proof.note(
+                self.function,
+                "normal_path_precondition",
+                f"Normal execution requires {condition}; the guard value is not inferred.",
+                statement.test,
+            )
+            return True
+        return False
+
+    def unshadowed_error_name(self, name):
+        from pcresolve.scope_facts import statement_scope_facts
+
+        try:
+            with tokenize.open(self.function.identity.file_path) as stream:
+                tree = ast.parse(stream.read())
+        except (OSError, SyntaxError, UnicodeError):
+            return False
+        scopes = [tree] + [
+            item
+            for item in ast.walk(tree)
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.lineno <= self.function.node.lineno <= item.end_lineno
+        ]
+        return name not in self.values and all(
+            name not in (facts.bound | facts.globals | facts.nonlocals)
+            for scope in scopes
+            for facts in (statement_scope_facts(scope.body),)
+        )
+
     def statements(self, statements):
         for statement in statements:
             if self.returned:
@@ -286,6 +381,8 @@ class _Frame:
                 condition = self.expression(statement.test)
                 truth = self.truth(condition)
                 if truth is None:
+                    if self.normal_path_guard(statement):
+                        continue
                     abrupt = any(
                         isinstance(item, (ast.Return, ast.Raise, ast.Break, ast.Continue))
                         for branch in (*statement.body, *statement.orelse)
@@ -659,6 +756,8 @@ def assess_change(
 ) -> ParameterAssessment:
     """Assess one changed keyword under one original call's finite conditions.
 
+    Results may be conditional on recorded normal-path preconditions for
+    unrelated, error-only guards; those records do not infer a receiver value.
     HANDLED/IGNORED are handling facts, not old/new behavior equivalence.
     REJECTED supplies parameter-specific evidence, not a patch or proof that a
     proposed patch works. UNKNOWN never means that the parameter is compatible.

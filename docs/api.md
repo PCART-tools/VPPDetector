@@ -208,6 +208,11 @@ normalized original `call_text` and an optional `callsite`. Its `state` is a
 and `unknown`. `reason` explains the outcome; `evidence` records supporting
 bindings, uses and paths, and `boundaries` records analysis limits.
 
+Evidence with reason `normal_path_precondition` retains a condition required
+to proceed past a supported unrelated error-only guard. It is not an observed
+guard value. The result then describes parameter handling on that normal path;
+see [normal-path preconditions](analysis-limits.md#normal-path-preconditions).
+
 See [assessment states](analysis-limits.md#assessment-states) for the meaning
 of each result.
 

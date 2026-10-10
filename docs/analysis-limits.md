@@ -94,12 +94,12 @@ for scope selection and context construction.
 ## Assessment states
 
 Each assessment describes one selected changed argument under the supplied
-call conditions.
+call conditions and any recorded normal-path preconditions.
 
 | State | Meaning |
 | --- | --- |
 | `HANDLED` | The argument's value or presence is used, or its value binds to a downstream explicit parameter. |
-| `REJECTED` | Supported call conditions lead to a parameter-specific binding rejection. |
+| `REJECTED` | Supported call conditions and recorded preconditions lead to a parameter-specific binding rejection. |
 | `IGNORED` | Supported executed paths do not use the argument's value or presence. |
 | `UNKNOWN` | Binding, control flow, dispatch or effects prevent a definite result. |
 
@@ -115,6 +115,21 @@ Current assessment covers changed keywords captured by `**kwargs`, regardless
 of the container's name. Supported cases include direct/alias forwarding,
 finite expansions, bounded `pop` effects, simple literal/default-value guards
 and source-resolved downstream binding.
+
+### Normal-path preconditions
+
+An unknown simple guard that only raises an unrelated exception need not stop
+parameter analysis. The analyzer records a `normal_path_precondition` in
+`evidence` and continues along the normal path, without assigning a value to
+the guard or the receiver attribute. This applies only to supported plain
+reads, a single unshadowed built-in exception construction with constant
+arguments, and an empty or `pass`-only alternative branch.
+
+An available guard value still selects the actual supported branch. Parameter
+consumption, early returns, exception recovery, calls in the condition or
+message, and source-known custom receiver getters are not bypassed. Results
+with preconditions describe argument handling on the normal path, not proof
+that a particular invocation reaches it.
 
 Positional-element propagation, exception recovery, unknown mutation, deferred
 execution and unsupported transformations remain explicit boundaries.
