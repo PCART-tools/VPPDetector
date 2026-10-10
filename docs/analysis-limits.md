@@ -117,6 +117,11 @@ Supported cases include direct/alias forwarding, finite expansions, bounded
 `pop` effects, simple literal/default-value guards and source-resolved
 downstream binding.
 
+Finite guards support `isinstance()` against unshadowed built-in `str`, `bytes`,
+`int`, `float`, `bool` and `object` types, and `startswith()` / `endswith()` on
+known strings with one known string argument. Unknown values, shadowed built-ins
+and unsupported predicate arguments remain unresolved; source code is not run.
+
 Positional assessment preserves finite sequence order through constant indices,
 slices, same-kind concatenation and expansion. Rejection requires the selected
 value to reach a slot beyond a callee's positional capacity or another supported

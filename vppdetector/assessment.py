@@ -323,7 +323,7 @@ class _Frame:
                 or not issubclass(exception, Exception)
                 or call.keywords
                 or any(not isinstance(item, ast.Constant) for item in call.args)
-                or not self.unshadowed_error_name(call.func.id)
+                or not self.unshadowed_builtin_name(call.func.id)
             ):
                 continue
             edge = next(
@@ -348,7 +348,7 @@ class _Frame:
             return True
         return False
 
-    def unshadowed_error_name(self, name):
+    def unshadowed_builtin_name(self, name):
         from pcresolve.scope_facts import statement_scope_facts
 
         try:
@@ -610,6 +610,26 @@ class _Frame:
         )
         if isinstance(node.func, ast.Attribute):
             receiver = self.expression(node.func.value)
+            if (
+                isinstance(receiver, _Value)
+                and type(receiver.literal) is str
+                and node.func.attr in ("startswith", "endswith")
+            ):
+                positional, keywords = self.arguments(node)
+                tracked = _tracked(receiver) or any(
+                    _tracked(item) for item in positional + list(keywords.values())
+                )
+                if (
+                    len(positional) == 1
+                    and not keywords
+                    and isinstance(positional[0], _Value)
+                    and type(positional[0].literal) is str
+                ):
+                    return _Value(
+                        getattr(str, node.func.attr)(receiver.literal, positional[0].literal),
+                        tracked,
+                    )
+                return _Value(tracked=tracked)
             if isinstance(receiver, _Keywords):
                 if (
                     node.func.attr == "pop"
@@ -661,8 +681,7 @@ class _Frame:
             and facts
             and facts.target is None
             and facts.target_status == "builtin_boundary"
-            and "isinstance"
-            not in self.proof.context.index.imports.get(self.function.identity.module, {})
+            and self.unshadowed_builtin_name("isinstance")
         ):
             return self.instance_guard(node)
         if self.related(node.func):
@@ -769,6 +788,12 @@ class _Frame:
         if not isinstance(value, _Value) or value.literal is _UNKNOWN:
             return _Value(tracked=_tracked(value))
         expression = ast.unparse(node.args[1])
+        if (
+            isinstance(node.args[1], ast.Name)
+            and expression in ("str", "bytes", "int", "float", "bool", "object")
+            and self.unshadowed_builtin_name(expression)
+        ):
+            return _Value(isinstance(value.literal, getattr(builtins, expression)), value.tracked)
         classes = self.proof.context.index
         identity = classes._definitions().resolve_name(
             self.function.identity.module,
