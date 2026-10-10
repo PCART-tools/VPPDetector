@@ -230,9 +230,12 @@ def scan_function(
         relevant_calls = set()
         for call in direct_calls(analysis, identity):
             object_arguments = [
-                item.get("argument") for item in call.argument_sources
-                if any(value.get("object_only") or value.get("container_object")
-                       for value in item.get("sources", ()))
+                item.get("argument")
+                for item in call.argument_sources
+                if any(
+                    value.get("object_only") or value.get("container_object")
+                    for value in item.get("sources", ())
+                )
             ]
             flows = [
                 flow
@@ -433,7 +436,8 @@ def _expand_body(
         raise ResolutionError("No usable call binding for callee-body propagation.")
     required = (
         call.target_status in {"classmethod", "super_new"}
-        or definition.node.name == "__new__" and any(
+        or definition.node.name == "__new__"
+        and any(
             owner.module == definition.identity.module
             and owner.file_path == definition.identity.file_path
             and definition.identity.qualname == owner.qualname + ".__new__"
@@ -461,7 +465,8 @@ def _expand_body(
         raise ResolutionError("No unique usable call edge for callee-body propagation.")
     child = context.adapter.expand(analysis, call.id)
     summaries = [
-        summary for summary in child.functions
+        summary
+        for summary in child.functions
         if identity_from_target(summary["function"]) == definition.identity
     ]
     if len(summaries) != 1:
@@ -472,9 +477,7 @@ def _expand_body(
         # narrow single-edge case; mixed snapshots remain explicit boundaries.
         for inner in direct_calls(child, definition.identity):
             contexts = getattr(inner, "analysis_contexts", ())
-            if not contexts or any(
-                item.get("incoming_call_id") != call.id for item in contexts
-            ):
+            if not contexts or any(item.get("incoming_call_id") != call.id for item in contexts):
                 raise ResolutionError("Mixed incoming callable contexts cannot prove one path.")
         return child
     receivers = _receiver_contexts(child, definition.identity)
@@ -486,7 +489,8 @@ def _expand_body(
     if not receivers:
         raise ResolutionError("Incoming class receiver facts are incomplete or conflicting.")
     positional = (
-        *definition.signature.positional_only, *definition.signature.positional_or_keyword
+        *definition.signature.positional_only,
+        *definition.signature.positional_or_keyword,
     )
     values = [
         value
@@ -498,10 +502,11 @@ def _expand_body(
         not value.get("class_type")
         or identity_from_target(value["class_type"]) != receivers[0]
         or value.get("relation") != "direct"
-        or value.get("projection") or value.get("output_path")
-        or any(value.get(flag) for flag in (
-            "value_incomplete", "import_incomplete", "import_modified"
-        ))
+        or value.get("projection")
+        or value.get("output_path")
+        or any(
+            value.get(flag) for flag in ("value_incomplete", "import_incomplete", "import_modified")
+        )
         for value in values
     ):
         raise ResolutionError("Incoming class receiver facts are incomplete or conflicting.")
@@ -605,10 +610,17 @@ def _routable_return(context: AnalysisContext, value: dict) -> bool:
                 for function in context.index.functions
                 if function.identity.file_path == source
                 for node in ast.walk(function.node)
-                if isinstance(node, (
-                    ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
-                    ast.JoinedStr, ast.FormattedValue,
-                ))
+                if isinstance(
+                    node,
+                    (
+                        ast.BinOp,
+                        ast.UnaryOp,
+                        ast.BoolOp,
+                        ast.Compare,
+                        ast.JoinedStr,
+                        ast.FormattedValue,
+                    ),
+                )
             }
         location = tuple(
             evidence.get(name) for name in ("lineno", "col_offset", "end_lineno", "end_col_offset")
@@ -660,15 +672,18 @@ def _returned_flows(
 
     def safe_values(values, owner, owner_analysis, endpoint, remaining):
         values = list(values)
-        endpoints = [value for value in values
-                     if value.get("object_only") or value.get("container_object")]
+        endpoints = [
+            value for value in values if value.get("object_only") or value.get("container_object")
+        ]
         object_path = None
         if endpoints:
             if len(endpoints) != 1:
                 boundaries.append(
                     AnalysisBoundary(
-                        "return_object_unproven", "Returned object contexts are conflicting.",
-                        owner.identity, call_span(endpoint) if endpoint is not owner.node else None,
+                        "return_object_unproven",
+                        "Returned object contexts are conflicting.",
+                        owner.identity,
+                        call_span(endpoint) if endpoint is not owner.node else None,
                     )
                 )
                 return []
@@ -724,13 +739,30 @@ def _returned_flows(
             # its call context records the proven source-return witnesses.
             key = ("vpp_object_contents", endpoints[0]["source"], len(calls))
             calls[key] = ReturnCall(
-                key, None, (CallBinding("parameter", "contents", tuple(result)),),
-                ({"kind": "parameter", "source": "contents", "relation": "direct",
-                  "evidence": [], "conditions": [], "call_context": list(object_path[1:])},),
+                key,
+                None,
+                (CallBinding("parameter", "contents", tuple(result)),),
+                (
+                    {
+                        "kind": "parameter",
+                        "source": "contents",
+                        "relation": "direct",
+                        "evidence": [],
+                        "conditions": [],
+                        "call_context": list(object_path[1:]),
+                    },
+                ),
             )
             producers[key] = producers[object_path[0]]
-            return [{"kind": "call_result", "source": key, "relation": "direct",
-                     "evidence": [], "conditions": []}]
+            return [
+                {
+                    "kind": "call_result",
+                    "source": key,
+                    "relation": "direct",
+                    "evidence": [],
+                    "conditions": [],
+                }
+            ]
         return result
 
     def collect(values, owner, owner_analysis, remaining, stack):
@@ -824,8 +856,14 @@ def _returned_flows(
     def object_context(value, owner, owner_analysis, remaining, stack=()):
         """Use identity only for the path; never recover its old input contents."""
 
-        producer = next((call for call in direct_calls(owner_analysis, owner.identity)
-                         if call.id == value.get("source")), None)
+        producer = next(
+            (
+                call
+                for call in direct_calls(owner_analysis, owner.identity)
+                if call.id == value.get("source")
+            ),
+            None,
+        )
         if producer is None:
             boundary(
                 "return_object_unproven", "Returned object has no local call edge.", destination
@@ -833,8 +871,10 @@ def _returned_flows(
             return None
         obj = value.get("container_object", {})
         if not _proven_object_alias(value) or (
-            producer.analysis_status != "analyzed" or producer.binding_status != "complete"
-            or not producer.target or _target_status(owner_analysis, producer) != "resolved"
+            producer.analysis_status != "analyzed"
+            or producer.binding_status != "complete"
+            or not producer.target
+            or _target_status(owner_analysis, producer) != "resolved"
             or identity_from_target(obj["function"]) != identity_from_target(producer.target)
         ):
             boundary("return_object_unproven", "Returned object identity is incomplete.", producer)
@@ -853,9 +893,11 @@ def _returned_flows(
             return None
         producers[producer.id] = producer
         incoming = [
-            source for item in producer.argument_sources
+            source
+            for item in producer.argument_sources
             if item.get("parameter") == obj["parameter"]
-            for source in item.get("sources", ()) if source.get("object_only")
+            for source in item.get("sources", ())
+            if source.get("object_only")
         ]
         if not incoming:
             return (producer.id,)
@@ -962,7 +1004,8 @@ def _capture_return_value(value: dict, function: IndexedFunction) -> dict:
     if (
         value.get("kind") == "parameter"
         and value.get("source") in (function.signature.vararg, function.signature.kwarg)
-        and not value.get("projection") and path[-1:] == ["*"]
+        and not value.get("projection")
+        and path[-1:] == ["*"]
         and all(type(slot) is int and slot >= 0 for slot in path[:-1])
     ):
         return dict(value, relation="contained" if path[:-1] else "direct", output_path=path[:-1])
@@ -1027,12 +1070,17 @@ def _proven_object_alias(value: dict) -> bool:
 
     obj = value.get("container_object", {})
     return bool(
-        value.get("object_only") and value.get("kind") == "call_result"
-        and value.get("relation") == "direct" and not value.get("projection")
-        and not value.get("output_path") and not value.get("value_incomplete")
+        value.get("object_only")
+        and value.get("kind") == "call_result"
+        and value.get("relation") == "direct"
+        and not value.get("projection")
+        and not value.get("output_path")
+        and not value.get("value_incomplete")
         and obj.get("identity") == "argument_alias"
         and obj.get("container_shape") in {"dict", "list", "tuple"}
-        and obj.get("source") and obj.get("parameter") and obj.get("function")
+        and obj.get("source")
+        and obj.get("parameter")
+        and obj.get("function")
     )
 
 
@@ -1040,17 +1088,28 @@ def _modeled_mapping_removal(analysis: Any, call: Any) -> bool:
     """Recognize complete bounded effects, not purity from a helper's spelling."""
 
     if (
-        not call.target or _target_status(analysis, call) != "resolved"
-        or call.binding_status != "complete" or not call.effects
-        or any(boundary.get("call_id") == call.id and boundary.get("reason") in {
-            "mapping_effect_unproven", "mapping_effect_budget", "container_effect_unknown",
-            "identity_decorator_effects_unmodeled",
-        } for boundary in analysis.boundaries)
+        not call.target
+        or _target_status(analysis, call) != "resolved"
+        or call.binding_status != "complete"
+        or not call.effects
+        or any(
+            boundary.get("call_id") == call.id
+            and boundary.get("reason")
+            in {
+                "mapping_effect_unproven",
+                "mapping_effect_budget",
+                "container_effect_unknown",
+                "identity_decorator_effects_unmodeled",
+            }
+            for boundary in analysis.boundaries
+        )
     ):
         return False
     return all(
-        effect.get("kind") == "mapping_element" and effect.get("operation") in {"pop", "delete"}
-        and effect.get("completion") == "normal_return" and effect.get("status") == "bounded"
+        effect.get("kind") == "mapping_element"
+        and effect.get("operation") in {"pop", "delete"}
+        and effect.get("completion") == "normal_return"
+        and effect.get("status") == "bounded"
         and effect.get("state_after") in {"absent", "conditional"}
         and effect.get("call_id") == call.id
         and effect.get("binding", {}).get("status") == "exact"
