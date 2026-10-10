@@ -11,7 +11,7 @@ argument handling.
 | Analysis | Question | Result |
 | --- | --- | --- |
 | Whole-package or on-demand scan | Does an API's open variadic container reach an expansion into a signature without the corresponding variadic parameter? | `ScanReport` with findings, paths and boundaries. |
-| Parameter-level assessment | How is one supplied changed keyword handled under the original call's conditions? | `ParameterAssessment` with a state, evidence and boundaries. |
+| Parameter-level assessment | How is one supplied changed argument handled under the original call's conditions? | `ParameterAssessment` with a state, evidence and boundaries. |
 
 The two scan scopes share one detection core. Whole-package scanning considers
 indexed non-overload function entries; on-demand scanning starts from one
@@ -20,7 +20,8 @@ resolved API implementation and retains its requested public identity.
 A structural finding can coexist with a handled argument. For example,
 `wrapper(**kwargs)` forwarding to `target(allowed=0)` has a VPP structure,
 while `wrapper(allowed=7)` binds the supplied argument to an explicit downstream
-parameter. Assessment examines the selected name and call conditions.
+parameter. Assessment examines the selected name or positional element and
+call conditions.
 
 ## Source preparation and program facts
 
@@ -63,7 +64,10 @@ The [coverage document](analysis-limits.md) describes these cases in detail.
 
 The caller supplies one identified deletion or rename and an original call.
 Assessment binds the call to the selected new implementation and tracks the
-changed keyword captured by its variadic keyword parameter.
+changed keyword or positional element captured by the corresponding variadic
+parameter. Finite positional containers retain the selected element's identity
+through supported ordering operations; they are not treated as open structural
+carriers for deciding a concrete argument's acceptance.
 
 Supported literal/default-value guards, named-key operations, forwarding and
 downstream binding produce call-specific evidence. The result identifies

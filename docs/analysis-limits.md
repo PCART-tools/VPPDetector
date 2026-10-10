@@ -94,12 +94,12 @@ for scope selection and context construction.
 ## Assessment states
 
 Each assessment describes one selected changed argument under the supplied
-call conditions.
+call conditions and any recorded normal-path preconditions.
 
 | State | Meaning |
 | --- | --- |
 | `HANDLED` | The argument's value or presence is used, or its value binds to a downstream explicit parameter. |
-| `REJECTED` | Supported call conditions lead to a parameter-specific binding rejection. |
+| `REJECTED` | Supported call conditions and recorded preconditions lead to a parameter-specific binding rejection. |
 | `IGNORED` | Supported executed paths do not use the argument's value or presence. |
 | `UNKNOWN` | Binding, control flow, dispatch or effects prevent a definite result. |
 
@@ -111,15 +111,44 @@ modification succeeds.
 
 ### Assessment coverage
 
-Current assessment covers changed keywords captured by `**kwargs`, regardless
-of the container's name. Supported cases include direct/alias forwarding,
-finite expansions, bounded `pop` effects, simple literal/default-value guards
-and source-resolved downstream binding.
+Current assessment covers changed keywords captured by `**kwargs` and selected
+positional elements captured by `*args`, regardless of the container's name.
+Supported cases include direct/alias forwarding, finite expansions, bounded
+`pop` effects, simple literal/default-value guards and source-resolved
+downstream binding.
 
-Positional-element propagation, exception recovery, unknown mutation, deferred
-execution and unsupported transformations remain explicit boundaries.
-An absent selected keyword or a keyword not captured by the target's variadic
-parameter also yields an unresolved assessment.
+Finite guards support `isinstance()` against unshadowed built-in `str`, `bytes`,
+`int`, `float`, `bool` and `object` types, and `startswith()` / `endswith()` on
+known strings with one known string argument. Unknown values, shadowed built-ins
+and unsupported predicate arguments remain unresolved; source code is not run.
+
+Positional assessment preserves finite sequence order through constant indices,
+slices, same-kind concatenation and expansion. Rejection requires the selected
+value to reach a slot beyond a callee's positional capacity or another supported
+parameter-specific binding conflict. An error caused only by another supplied
+element does not license rejecting the selected one. Unknown-length expansions,
+sequence unpacking, ordinary-container helper calls and unsupported mutations
+remain boundaries rather than assumptions about argument acceptance.
+
+### Normal-path preconditions
+
+An unknown simple guard that only raises an unrelated exception need not stop
+parameter analysis. The analyzer records a `normal_path_precondition` in
+`evidence` and continues along the normal path, without assigning a value to
+the guard or the receiver attribute. This applies only to supported plain
+reads, a single unshadowed built-in exception construction with constant
+arguments, and an empty or `pass`-only alternative branch.
+
+An available guard value still selects the actual supported branch. Parameter
+consumption, early returns, exception recovery, calls in the condition or
+message, and source-known custom receiver getters are not bypassed. Results
+with preconditions describe argument handling on the normal path, not proof
+that a particular invocation reaches it.
+
+Exception recovery, unknown mutation, deferred execution and unsupported
+transformations remain explicit boundaries. An absent selected argument or one
+not captured by the target's corresponding variadic parameter also yields an
+unresolved assessment.
 
 ### Supplied call facts
 
