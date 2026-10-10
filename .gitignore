@@ -1,0 +1,17 @@
+PCART/
+Path
+Tool
+KWARGS/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+tmp/
+
+# PCART-tools AGPL projects keep test suites local.
+/tests/
+/evaluation/
+/CHANGELOG.md
