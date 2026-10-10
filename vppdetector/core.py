@@ -30,7 +30,10 @@ class PCResolveAdapter:
         try:
             from pcresolve import FlowAnalyzer
         except ImportError as exc:  # pragma: no cover - packaging failure
-            raise ResolutionError("PCResolve is required; install pcresolve>=1.0.6,<2") from exc
+            raise ResolutionError(
+                "PCResolve newer than 1.0.7 is required; install pcresolve>1.0.7 "
+                "with 'python -m pip install -e .' from the VPPDetector checkout"
+            ) from exc
         self._analyzer = FlowAnalyzer(
             source_files=index.files,
             import_roots=index.source.import_roots,

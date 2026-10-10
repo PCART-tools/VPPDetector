@@ -22,7 +22,7 @@ class DefVisitor(ast.NodeVisitor):
         self._position = position
 
     def setFlag(self, varargFlag, kwargFlag):
-        self._varargFlag = varargFlag 
+        self._varargFlag = varargFlag
         self._kwargFlag = kwargFlag
 
     def visit_ClassDef(self, node):
@@ -47,8 +47,8 @@ class DefVisitor(ast.NodeVisitor):
 
                         self.target = flag1 or flag2
                         return
-        
-        if not self.target: 
+
+        if not self.target:
             self.generic_visit(node)
 
 
@@ -67,11 +67,11 @@ class DefVisitor(ast.NodeVisitor):
                     node.args.kwarg.arg
                 except:
                     flag2 = True
-            
+
             self.target = flag1 or flag2
             return
-        
-        if not self.target: 
+
+        if not self.target:
             self.generic_visit(node)
 
 
@@ -82,7 +82,7 @@ class CallVisitor:
 
     def clean(self):
         self.callDict.clear()
-    
+
     def setName(self, varargName, kwargName):
         self._varargName = varargName
         self._kwargName = kwargName
@@ -103,15 +103,15 @@ class CallVisitor:
                 if paraName == f"**{self._kwargName}":
                     kwargFlag = True
                     break
-            
+
             if varargFlag or kwargFlag:
                 callName = ast.unparse(node.func)
                 if callName not in self.callDict:
                     self.callDict[callName] = (node.lineno, varargFlag, kwargFlag)
-                
+
                 # print(callName, node.lineno)
                 return
-        
+
         for n in ast.iter_child_nodes(node):
             self.dfsVisit(n)
 
@@ -149,7 +149,7 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
                             if flag:
                                 self.positionLst.append(n.lineno)
 
-    #找普通的API 
+    #找普通的API
     def visitFunctionDef(self, root):
         for node in ast.iter_child_nodes(root):
             if isinstance(node, ast.FunctionDef): #抽取类内API
@@ -162,7 +162,7 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
                             break
                     if flag:
                         self.positionLst.append(node.lineno)
-    
+
 
     def visit_FunctionDef(self, node):
         if node.name == self.APIName:
@@ -189,20 +189,20 @@ class FunctionDefVisitor(ast.NodeVisitor):
         self.cnt3 = 0 #记录被传递的函数定义中不含有对应*arg或**kwargs的个数
         self._classStack = [] #保存类信息
         self._classNodeStack = [] #保存类节点
- 
-    
+
+
     def setRoot(self, root):
         self._root = root
 
 
     def setPrefix(self, prefix):
         self._prefix =  prefix #记录文件的路径
-    
+
 
     def setEvolutionDict(self, evolutionDict): #设置变更字典
         self._evolutionDict = evolutionDict
 
-    
+
     def clean(self):
         self._callVisitor.clean()
         self._findAPIPosition.clean()
@@ -224,10 +224,10 @@ class FunctionDefVisitor(ast.NodeVisitor):
             self._findAPIPosition.visitClasDef(node)
         else:
             self._findAPIPosition.visitFunctionDef(node)
-        
+
         positionLst = copy.deepcopy(self._findAPIPosition.positionLst)
         self._findAPIPosition.positionLst.clear() #清空
-        return positionLst 
+        return positionLst
 
 
     def findNoKwargCallDef(self, positionLst, varargFlag, kwargFlag):
@@ -240,7 +240,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
             if self._callDefVisitor.target:
                 ansLst.append(pos)
                 self._callDefVisitor.target = False
-        
+
         return ansLst
 
 
@@ -259,7 +259,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
         paraLst = []
         for para in node.args.args + node.args.kwonlyargs:
             paraLst.append(ast.unparse(para))
-       
+
         varargName = ""
         kwargName = ""
         varargFlag = True #假设有*args
@@ -268,22 +268,22 @@ class FunctionDefVisitor(ast.NodeVisitor):
             varargName = node.args.vararg.arg
         except:
             varargFlag = False
-        
+
         try:
             kwargName = node.args.kwarg.arg
         except:
             kwargFlag = False
 
         #step1: 找出参数定义中含有可变参数的API
-        if varargFlag or kwargFlag: 
+        if varargFlag or kwargFlag:
             currentClass = '.'.join(self._classStack) if self._classStack else ""
             if currentClass:
                 fullPathName = self._prefix + '.' + currentClass + '.' + node.name
             else:
                 fullPathName = self._prefix + '.' + node.name
             self.cnt1 += 1
-            self.defWithVariadicParaLst.append({fullPathName: node.lineno}) 
-            
+            self.defWithVariadicParaLst.append({fullPathName: node.lineno})
+
             #step2: 再从函数体内找被传递*args或**kwargs的调用API
             self._callVisitor.setName(varargName, kwargName)
             self._callVisitor.dfsVisit(node)
@@ -292,37 +292,37 @@ class FunctionDefVisitor(ast.NodeVisitor):
                 #如果调用API来自参数，则跳过
                 if callName in paraLst:
                     continue
-                
+
                 callPos = val[0]
                 varFlag = val[1]
                 kwFlag = val[2]
                 # 寻找callName定义的位置
                 if 'self.' in callName:
                     callName = callName.replace("self.", "")
-                
+
                 if len(self._classNodeStack) > 0:
                     tempNode = self._classNodeStack[-1]
                     #若是通过self进行调用的，则优先在当前类中查找调用函数的定义
                     callDefPosLst = self.findCallDef(callName, tempNode)
-                    
+
                     #若当前类找不到，则再从当前文件进行查找，但也只从类中查找
                     if len(callDefPosLst) == 0:
                         callDefPosLst = self.findCallDef(callName, self._root, 1)
                 else:
                     #只查找普通函数
                     callDefPosLst = self.findCallDef(callName, self._root, 2)
-                
+
                 if len(callDefPosLst) > 0:
                     #再从这些API里筛选出参数定义中不含可变参数的API
                     callDefNoKwargPosLst = self.findNoKwargCallDef(callDefPosLst, varFlag, kwFlag)
                     if len(callDefNoKwargPosLst):
                         tempDict = {fullPathName: node.lineno, callName: (callPos, str(callDefNoKwargPosLst))}
                         if len(callDefNoKwargPosLst) == 1:
-                            self.cnt3 += 1 
+                            self.cnt3 += 1
                             self.lst.append(tempDict)
-                
+
             self.clean()  # 清理
-        
+
         self.generic_visit(node)
 
 
@@ -369,10 +369,10 @@ def getKwargAPI(libName):
     pathObj1.getPath(f"/home/zhang/Packages/{libName}") #库源码路径
     libPath = pathObj1.path
     visitor = FunctionDefVisitor()
-    
+
     os.makedirs(f"KWARGS/APIDefWithVariadicPara/{libName}", exist_ok=True)
     os.makedirs(f"KWARGS/VariadicParaPitfalls/{libName}", exist_ok=True)
-    
+
     cntDict = {} #计数字典，保存所有版本的数据
     for lib in libPath: #版本库路径
         libNameAndVersion = lib.split('/')[-1]
@@ -413,11 +413,11 @@ def getKwargAPI(libName):
         if len(defDict) > 0:
             with open(f"KWARGS/APIDefWithVariadicPara/{libName}/{fileName}.txt", 'w') as fw:
                 json.dump(defDict, fw, indent=4, ensure_ascii=False)
-        
+
         if len(dic) > 0:
             with open(f"KWARGS/VariadicParaPitfalls/{libName}/{fileName}.txt", 'w') as fw:
                 json.dump(dic, fw, indent=4, ensure_ascii=False)
-        
+
 
 
         #保存当前版本库的计数

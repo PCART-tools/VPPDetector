@@ -8,4 +8,3 @@ Copyright (c) 2026 Guanping Xiao
 The PCResolve distribution contains the complete MIT license text. When
 PCResolve is copied or bundled with VPPDetector, its copyright and license
 notice must be retained.
-

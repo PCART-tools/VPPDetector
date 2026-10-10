@@ -13,7 +13,7 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{name = "VPPDetector contributors"}]
 dependencies = [
     "chardet>=3",
-    "pcresolve>=1.0.6,<2",
+    "pcresolve>1.0.7",
 ]
 
 [tool.setuptools.packages.find]
