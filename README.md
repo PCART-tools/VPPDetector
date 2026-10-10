@@ -1,4 +1,4 @@
-# VPPDetector
+## What is VPPDetector?
 
 VPPDetector detects potential variadic-parameter pitfalls in Python library
 source. A VPP occurs when a library API's `*args` or `**kwargs` propagates to
