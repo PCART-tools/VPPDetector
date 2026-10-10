@@ -32,6 +32,8 @@ def scan_package(
 
     _validate_depth(max_depth)
     index, context = _prepare_context(package_root, import_roots, context)
+    if index.is_api_scope:
+        raise ValueError("Whole-package scanning requires a full-source context")
     if not index.files:
         return _empty_source_report(index)
     entries = tuple(function for function in index.functions if not function.is_overload)
@@ -156,7 +158,7 @@ def _empty_source_report(index: SourceIndex) -> ScanReport:
             *index.boundaries,
             AnalysisBoundary(
                 code="no_python_sources",
-                message="No Python source files were found under the package root.",
+                message="No Python source files are available in the requested analysis scope.",
             ),
         ),
     )

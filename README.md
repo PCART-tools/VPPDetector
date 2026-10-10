@@ -90,6 +90,31 @@ multiple APIs from the same library version. Both scan functions accept
 the requested API to its source implementation; findings retain the requested
 API identity and the path retains implementation identities.
 
+When the implementation file is known, prepare a smaller context without
+depending on any particular API-mapping tool:
+
+```python
+target = FunctionIdentity(
+    "example.api", "wrapper", file_path=Path("/sources/example/api.py")
+)
+context = AnalysisContext.for_api(source, target)
+report = scan_api(source, target, context=context)
+```
+
+`for_api()` indexes the located file, package initializers and explicit imports
+within the source root, sharing one AST parse for dependency discovery and VPP
+indexing. It also works with `assess_change()`. Without a file hint it retains
+full-source preparation. File/name/line conflicts are not resolved by guessing;
+unavailable implementations and unproven downstream calls remain boundaries.
+Dynamic dependencies are not inferred, and an import closure is not proof of
+complete runtime coverage. Module names are derived from `SourceContext`'s import
+roots, not from PCART-specific metadata or files.
+
+An API-scoped context cannot be used for `scan_package()`; use `from_source()`
+for whole-library scanning. Reuse a context only for definitions/dependencies
+already in its fixed file set and while its source snapshot is unchanged. A
+different entry outside that set needs its own context or a full-source context.
+
 The scanner supports functions, methods, `async def`, cross-file imports,
 aliases, public class re-exports, inherited methods and source constructor
 entries (`__init__`, otherwise `__new__`). Ambiguous constructor definitions

@@ -70,6 +70,7 @@ class SourceIndex:
     boundaries: Tuple[AnalysisBoundary, ...]
     imports: dict = field(default_factory=dict)
     classes: Tuple[FunctionIdentity, ...] = ()
+    is_api_scope: bool = False
     _definition_index: object = field(default=None, init=False, repr=False)
 
     def find(self, identity: FunctionIdentity) -> Optional[IndexedFunction]:
@@ -304,7 +305,15 @@ class _FunctionCollector(ast.NodeVisitor):
         self.scope.pop()
 
 
-def build_source_index(source: SourceContext) -> SourceIndex:
+def build_source_index(
+    source: SourceContext, *, target_api: Optional[FunctionIdentity] = None
+) -> SourceIndex:
+    """Index all sources, or one located API's package-local import closure.
+
+    A missing file hint retains full-source behavior. An explicit hint is never
+    replaced by a name guess. Dependency discovery shares the indexing AST;
+    dynamic imports and sources outside the root are not added implicitly.
+    """
     from pcresolve.import_facts import import_facts, resolve_relative_module
     from pcresolve.scope_facts import statement_scope_facts
 
@@ -313,14 +322,30 @@ def build_source_index(source: SourceContext) -> SourceIndex:
         raise FileNotFoundError("Package root does not exist: {}".format(root))
     import_roots = normalized_import_roots(source)
     normalized_source = SourceContext(package_root=root, import_roots=import_roots)
-    files = tuple(_python_files(root))
+    is_api_scope = target_api is not None and target_api.file_path is not None
+    if is_api_scope:
+        entry_path = target_api.file_path.resolve()
+        if not _within_source(entry_path, root):
+            raise ValueError("API file must be within the requested source root")
+        pending = [entry_path] if entry_path.is_file() else []
+        if pending:
+            pending.extend(_package_initializers(entry_path, root, import_roots))
+    else:
+        pending = list(reversed(tuple(_python_files(root))))
+    queued = set(pending)
+    visited = set()
+    locations = {}
     functions: List[IndexedFunction] = []
     constructors: List[IndexedConstructor] = []
     classes: List[FunctionIdentity] = []
     boundaries: List[AnalysisBoundary] = []
     imports = {}
 
-    for file_path in files:
+    while pending:
+        file_path = pending.pop()
+        if file_path in visited:
+            continue
+        visited.add(file_path)
         try:
             with tokenize.open(file_path) as stream:
                 tree = ast.parse(stream.read(), filename=str(file_path))
@@ -333,6 +358,29 @@ def build_source_index(source: SourceContext) -> SourceIndex:
             )
             continue
         module = module_name_for_path(file_path, import_roots)
+        if is_api_scope:
+            for node in ast.walk(tree):
+                for fact in import_facts(node):
+                    if fact.kind == "import":
+                        modules = (fact.name,)
+                    else:
+                        prefix = resolve_relative_module(
+                            module, file_path.name == "__init__.py", fact.module, fact.level
+                        )
+                        modules = (prefix, prefix + "." + fact.name)
+                    for name in modules:
+                        if name not in locations:
+                            locations[name] = _module_files(name, root, import_roots)
+                        for dependency in locations[name]:
+                            if dependency in queued:
+                                continue
+                            for selected in (
+                                dependency,
+                                *_package_initializers(dependency, root, import_roots),
+                            ):
+                                if selected not in queued:
+                                    queued.add(selected)
+                                    pending.append(selected)
         aliases = {}
         imported_bindings = {}
         rebound = set()
@@ -371,19 +419,77 @@ def build_source_index(source: SourceContext) -> SourceIndex:
 
     return SourceIndex(
         source=normalized_source,
-        files=files,
-        functions=tuple(functions),
-        constructors=tuple(constructors),
+        files=tuple(sorted(visited)),
+        functions=tuple(
+            sorted(functions, key=lambda item: (str(item.identity.file_path), item.node.lineno))
+        ),
+        constructors=tuple(
+            sorted(
+                constructors,
+                key=lambda item: (str(item.function.identity.file_path), item.function.node.lineno),
+            )
+        ),
         boundaries=tuple(boundaries),
         imports=imports,
-        classes=tuple(classes),
+        classes=tuple(sorted(classes, key=lambda item: (str(item.file_path), item.lineno))),
+        is_api_scope=is_api_scope,
     )
+
+
+def _within_source(path: Path, root: Path) -> bool:
+    if root.is_file():
+        return path == root
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _module_files(module: str, root: Path, import_roots: Sequence[Path]) -> Tuple[Path, ...]:
+    parts = module.split(".")
+    if not all(part.isidentifier() for part in parts):
+        return ()
+    files = set()
+    for import_root in import_roots:
+        stem = import_root.joinpath(*parts)
+        for candidate in (stem.with_suffix(".py"), stem / "__init__.py"):
+            if not candidate.is_file():
+                continue
+            path = candidate.resolve()
+            if _within_source(path, root):
+                files.add(path)
+    # Preserve ambiguous source candidates for PCResolve, never choose a root
+    # or file/package collision as an implicit ownership decision.
+    return tuple(sorted(files))
+
+
+def _package_initializers(path: Path, root: Path, import_roots: Sequence[Path]) -> Iterable[Path]:
+    for import_root in import_roots:
+        # A standalone file may itself be the inferred import root. There
+        # cannot be an ancestor package chain ending at a file path.
+        if path == import_root:
+            continue
+        try:
+            path.relative_to(import_root)
+        except ValueError:
+            continue
+        parent = path.parent
+        while parent != import_root:
+            candidate = parent / "__init__.py"
+            if candidate.is_file():
+                resolved = candidate.resolve()
+                if _within_source(resolved, root):
+                    yield resolved
+            parent = parent.parent
 
 
 def normalized_import_roots(source: SourceContext) -> Tuple[Path, ...]:
     if source.import_roots:
         return tuple(path.resolve() for path in source.import_roots)
     root = source.package_root.resolve()
+    if root.is_file():
+        return (root.parent,)
     if (root / "__init__.py").is_file():
         return (root.parent,)
     source_root = root / "src"

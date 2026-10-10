@@ -90,6 +90,17 @@ class AnalysisContext:
         return cls.from_index(build_source_index(source))
 
     @classmethod
+    def for_api(cls, source: SourceContext, target_api: FunctionIdentity) -> "AnalysisContext":
+        """Prepare a located API and its explicit package-local import closure.
+
+        Without a file hint, retain full-source preparation. Reuse this context
+        only for APIs whose implementations/dependencies are in its fixed file
+        set and only while the source snapshot remains unchanged.
+        """
+
+        return cls.from_index(build_source_index(source, target_api=target_api))
+
+    @classmethod
     def from_index(cls, index: SourceIndex) -> "AnalysisContext":
         return cls(index=index, adapter=PCResolveAdapter(index))
 
