@@ -6,27 +6,20 @@ a downstream expansion whose signature lacks the corresponding variadic
 parameter. Findings identify the root API, parameter channel, forwarding
 path and source locations.
 
-Two scan scopes share the same detection core:
+VPPDetector provides three Python interfaces:
 
 - `scan_package()` scans a whole library version for VPPs.
 - `scan_api()` scans one API and its downstream forwarding paths on demand.
+- `assess_change()` analyzes how one supplied parameter deletion or rename is
+  handled for a specific call.
 
-Both return a `ScanReport` with positive findings and `has_vpp`. Analysis
-limits are recorded separately in `boundaries`; an empty findings collection
-means no VPP was detected within the supported analysis, rather than proof
-that all dynamic Python behavior is compatible.
-
-VPPDetector uses PCResolve for program facts and call resolution.
-`assess_change()` analyzes how one already identified parameter deletion or
-rename is handled for a specific call, returning handling states and evidence.
+Scan results contain findings and analysis boundaries. An empty findings
+collection means no VPP was detected within the supported analysis.
 
 ## Requirements
 
 - Python 3.9 or newer
 - PCResolve newer than 1.0.7 (`pcresolve>1.0.7`)
-
-PCResolve supplies the callable, container and incoming-context facts used by
-the analyzer.
 
 From this checkout, install the package in editable mode:
 
@@ -34,11 +27,11 @@ From this checkout, install the package in editable mode:
 python -m pip install -e .
 ```
 
-This installs PCResolve and the other declared dependencies.
-PCResolve runs in the analyzer's Python environment; the analyzed library does
-not need to be installed or imported.
+This installs PCResolve and the other declared dependencies. PCResolve supplies
+program facts and call resolution in the analyzer's Python environment; the
+analyzed library does not need to be installed or imported.
 
-## Minimal example
+## Quick start
 
 Create the following source layout, with an empty `__init__.py`:
 
@@ -64,19 +57,14 @@ def consumed(**kwargs):
     return kwargs.pop("obsolete", 0)
 ```
 
-The scan examples below detect `wrapper` forwarding `**kwargs` to the fixed
-signature of `target`. Parameter-level analysis distinguishes
-`wrapper(obsolete=7)` (`rejected`) from `wrapper(allowed=7)` (`handled`) and
-`consumed(obsolete=7)` (`handled`). The caller supplies the identified parameter
-change as an input to the assessment.
-
-## Whole-package scan
-
-Scan one source version and print a JSON report:
+Scan the source and print a JSON report:
 
 ```shell
 python vppdetector.py example_lib
 ```
+
+The report includes a finding for `wrapper` forwarding `**kwargs` to the fixed
+signature of `target`, with `has_vpp: true`.
 
 Write the report to a file:
 
@@ -84,257 +72,35 @@ Write the report to a file:
 python vppdetector.py example_lib --output report.json
 ```
 
-Use repeated `--import-root` options when module names cannot be derived from
-the package root. The root script remains a thin whole-package scan entry
-point, with optional JSON output for standalone use.
-
-Run `python vppdetector.py --help` for the complete option list. `--max-depth`
-defaults to five forwarding hops; source-resolved return-producing calls also
-count toward this limit. `--output` writes to a file in an existing directory;
-without it, the report is printed to standard output.
-
-### Scan report
-
-Python callers receive a `ScanReport`; only the standalone CLI serializes it
-to JSON. Important fields are:
-
-| Field | Meaning |
-| --- | --- |
-| `has_vpp` | Whether at least one structural finding was detected. |
-| `functions_scanned` | Indexed, non-overload function entries considered in this scope. |
-| `variadic_functions` | Entries with `*args` or `**kwargs`. |
-| `findings` | Root API, variadic channel, downstream signature, source locations and forwarding path. |
-| `boundaries` | Unresolved targets, unsupported effects and other analysis limits; these are not findings. |
-| `target_api` / `resolved_api` | Requested and resolved implementation identities for an on-demand scan; absent for a whole-package scan. |
-| `analyzer_schema_version` | PCResolve program-fact schema version. |
-
-Each finding and path step retains `target_status`. A source candidate is not
-necessarily an exact runtime target, so `has_vpp` is not a client-call failure
-or compatibility verdict. Enum values in JSON are lowercase strings such as
-`var_keyword`; paths are serialized as strings.
+Run `python vppdetector.py --help` for all options. The default forwarding depth
+is five hops; use `--import-root` when the library needs an explicit module root.
 
 ## Python API
 
-### Whole-library scan
+Python callers receive result objects directly:
 
 ```python
 from vppdetector import scan_package
 
 report = scan_package("example_lib")
-print(report.has_vpp)
-for finding in report.findings:
-    print(finding.function, finding.parameter_kind, finding.target)
-    for step in finding.path:
-        print(step.function, step.callee_expression, step.callsite)
+print(report.has_vpp)  # True
 ```
 
-### On-demand API scan
+Use `scan_api()` for one API or `assess_change()` for a selected changed argument
+and original call. See the [API reference](docs/api.md) for complete examples,
+source identities and result fields.
 
-```python
-from pathlib import Path
+## Documentation
 
-from vppdetector import AnalysisContext, FunctionIdentity, SourceContext, scan_api
+- [API reference](docs/api.md): CLI options, Python interfaces, source location,
+  analysis contexts and returned objects.
+- [Design](docs/design.md): detection rules, shared analysis core, module
+  responsibilities and the original research scanner.
+- [Analysis coverage and limits](docs/analysis-limits.md): supported propagation,
+  assessment states and unresolved analysis boundaries.
 
-source = SourceContext(Path("example_lib"))
-context = AnalysisContext.from_source(source)
-report = scan_api(
-    source,
-    FunctionIdentity("example.api", "wrapper"),
-    context=context,
-)
-print(report.has_vpp)
-```
-
-### Source identities
-
-`package_root` selects the source scope. An `import_root` is the directory
-relative to which Python module names are formed, not necessarily the package
-directory itself. In the example, the module is `example.api`, the function's
-`qualname` is `wrapper`, and its file is `example_lib/example/api.py`.
-For methods, use a qualified name such as `Client.fetch`.
-
-Default import roots follow the source layout:
-
-| Source scope | Default import root |
-| --- | --- |
-| Package directory containing `__init__.py` | Its parent directory. |
-| Project directory containing `src/` | The `src/` directory. |
-| Other source directory | The directory itself. |
-| One source file | Its parent directory. |
-
-Supply `SourceContext(..., import_roots=(Path(...),))` or CLI `--import-root`
-when these defaults do not match the library's layout. `file_path`, when
-provided, must lie within the source scope. It locates the implementation,
-not a client file; an optional `lineno` must match its definition.
-
-Reusing an `AnalysisContext` retains the source index and analysis caches for
-multiple APIs from the same library version. Both scan functions accept
-`max_depth` (default five) and optional `import_roots`. On-demand scans resolve
-the requested API to its source implementation; findings retain the requested
-API identity and the path retains implementation identities.
-
-When the implementation file is known, prepare a smaller context:
-
-```python
-from pathlib import Path
-
-from vppdetector import AnalysisContext, FunctionIdentity, SourceContext, scan_api
-
-source = SourceContext(Path("example_lib"))
-target = FunctionIdentity(
-    "example.api", "wrapper", file_path=source.package_root / "example" / "api.py"
-)
-context = AnalysisContext.for_api(source, target)
-report = scan_api(source, target, context=context)
-```
-
-`for_api()` indexes the located file, package initializers and explicit imports
-within the source root, sharing one AST parse for dependency discovery and VPP
-indexing. It also works with `assess_change()`. Without a file hint it retains
-full-source preparation. File/name/line conflicts are not resolved by guessing;
-unavailable implementations and unproven downstream calls remain boundaries.
-Dynamic dependencies are not inferred, and an import closure is not proof of
-complete runtime coverage. Module names are derived from `SourceContext`'s import
-roots.
-
-An API-scoped context cannot be used for `scan_package()`; use `from_source()`
-for whole-library scanning. Reuse a context only for definitions/dependencies
-already in its fixed file set and while its source snapshot is unchanged. A
-different entry outside that set needs its own context or a full-source context.
-
-### Scan coverage and limits
-
-The scanner supports functions, methods, `async def`, cross-file imports,
-aliases, public class re-exports, inherited methods and source constructor
-entries (`__init__`, otherwise `__new__`). Ambiguous constructor definitions
-are not replaced with a guessed entry. Bounded multi-hop propagation includes
-source-resolved helpers returning a whole container, including selection through
-exact nonnegative tuple return slots. Slot dependencies are routed before checking
-the final open-container shape; finite contents and selected input elements are
-not treated as open forwarding. The evidence path retains return-producing calls,
-and they count toward `max_depth`. Classmethod and
-`__new__` helper forwarding retains source-proven incoming PCResolve receiver
-contexts. Missing or mixed receiver facts remain boundaries; mutable configuration
-attributes and class-context container returns are not inferred. Passing a mapping
-or sequence as an ordinary parameter is a propagation hop, not a VPP
-by itself; a finding requires an eventual `**mapping` or `*sequence` expansion
-into a signature without the matching variadic parameter. Unresolved targets,
-unsupported propagation, recursion and depth limits remain visible diagnostics.
-Ordinary helpers also retain incoming source-callable bindings when PCResolve
-provides an exact call-edge context. Mixed incoming contexts remain boundaries;
-the scanner does not infer callable targets from names or strings.
-Unknown effects on returned containers and transformations without open-shape
-facts (including comprehensions, copies and slices) remain analysis boundaries.
-When PCResolve supplies a proven returned-object alias, the scanner uses its
-separately materialized current contents, not the object's old input dependencies.
-Modeled finite-key removal retains the open remainder; clearing an alias does not
-restore the original contents. Object identity alone does not establish VPP.
-Complete ordinary-parameter constant-key removal facts can also preserve
-propagation through an existing alias. Normal-return effects do not prove call
-success or unconditional removal on exception paths; unproven effects remain
-analysis boundaries.
-When PCResolve proves a decorated callable's identity but leaves its effects
-unmodeled, the scanner does not use that callee's body to prove container returns
-or further forwarding. Direct expansion findings against its nominal signature
-retain the effects diagnostic; they do not assert that decoration was effect-free.
-Use `assess_change()` to examine a particular changed argument: a fixed
-downstream signature may still accept its name, or the library may consume its
-value before forwarding the remaining keywords.
-
-### Parameter-level assessment
-
-```python
-from pathlib import Path
-
-from vppdetector import (
-    AnalysisContext,
-    ChangeKind,
-    FunctionIdentity,
-    ParameterChange,
-    SourceContext,
-    assess_change,
-)
-
-source = SourceContext(Path("example_lib"))
-target = FunctionIdentity(
-    "example.api", "wrapper", file_path=source.package_root / "example" / "api.py"
-)
-context = AnalysisContext.for_api(source, target)
-
-assessment = assess_change(
-    source,
-    target,
-    ParameterChange(ChangeKind.DELETE, "obsolete"),
-    "wrapper(obsolete=7)",
-    context=context,
-)
-print(assessment.state.value)  # rejected
-```
-
-The input is the new source snapshot, selected API implementation, one deletion
-or rename, and the original call expression or `ast.Call`. Results are ordinary
-Python objects with binding/use/path evidence and analysis boundaries:
-
-- `HANDLED`: the argument's value or presence is used, or its value binds to a
-  downstream explicit parameter.
-- `REJECTED`: the supported call conditions lead to a parameter-specific binding
-  rejection.
-- `IGNORED`: the supported executed paths do not use the argument's value or
-  presence.
-- `UNKNOWN`: binding, control flow, dispatch or effects prevent a definite result.
-
-`ParameterAssessment` retains `target_api`, `resolved_api`, `change` and the
-original `call_text`. Its `state` is a `ParameterState` enum (serialized values
-are `handled`, `rejected`, `ignored`, `unknown`); `reason` explains the outcome,
-`evidence` records supporting bindings/uses/paths, and `boundaries` records
-analysis limits. The states describe argument handling under the supplied call
-conditions; behavioral equivalence and code modification are outside this
-analysis.
-
-The initial scope covers changed keywords captured by `**kwargs` (regardless of
-the container's name), direct/alias forwarding, finite expansions, bounded `pop`
-effects, simple literal/default-value guards and source-resolved downstream
-binding. Positional-element propagation, exception recovery, unknown mutation,
-deferred execution and unsupported transformations remain explicit boundaries.
-Assessment does not require a positive structural finding first.
-
-`CallContext` can additionally carry `bound_receiver`, trusted primitive
-`known_values` under source parameter names or receiver attribute paths, and
-`known_targets` pairing exact library `SourceSpan` locations with confirmed
-`FunctionIdentity` implementations. Facts must describe this call and this
-source version. A nominal PCResolve candidate is not a target confirmation;
-uncertain class dispatch remains `UNKNOWN` without independent evidence.
-The analyzer never executes client argument expressions or loads runtime object
-graphs. Context caches retain program facts, not API-only assessment decisions.
-
-Each assessment applies to the selected changed argument in the supplied call.
-Use the Python interface for parameter-level assessment and the CLI for
-whole-package scanning.
-
-## Source layout
-
-| File | Responsibility |
-| --- | --- |
-| `vppdetector.py` | Standalone whole-package scan CLI and JSON serialization. |
-| `vppdetector/__init__.py` | Public Python interfaces. |
-| `vppdetector/models.py` | Source identities, findings and parameter-level evidence. |
-| `vppdetector/source.py` | Source indexing, import roots and API location. |
-| `vppdetector/core.py` | Shared propagation logic, PCResolve adapter and reusable analysis context. |
-| `vppdetector/scanner.py` | Whole-package and on-demand scan scopes. |
-| `vppdetector/assessment.py` | Call-specific analysis of one already identified parameter change. |
-| `vppdetector/encoding.py` | Retained encoding helper; source indexing uses Python's declared source encoding. |
-
-## Version 1.0 research scanner
-
-The original implementation is retained in `legacy_vppdetector.py` for
-reproducibility. It requires the original `Path.getPath` and `Tool.tool` helper
-modules and contains dataset-specific paths. The current scan entry point is
-`vppdetector.py`.
-
-Historical outputs under `APIDefWithVariadicPara/` and
-`VariadicParaPitfalls/` are unchanged. They contain the original scanner's
-variadic API listings and potential pitfall records, respectively; they use the
-historical format, not the current `ScanReport` format.
+The original scanner and historical outputs are retained; see
+[Version 1.0 research scanner](docs/design.md#version-10-research-scanner).
 
 ## Publication
 
