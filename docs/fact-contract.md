@@ -46,7 +46,7 @@ complete Python semantics.
 | Conditions and incoming contexts | per-source `conditions`, `analysis_contexts`, boundary records | Partial; contradictory paths and distinct incoming edges cannot be joined as one witness. No complete path partition is promised. |
 | Captures and receivers | `capture_bindings`, `receiver_sources`, `receiver_type_evidence`, `callable_sources` | Partial; retain the defining/call context and source provenance. Nominal names alone do not bind a target. |
 | Instance arguments | direct `instance_type`, exact ordinary/implicit receiver bindings, `analysis_contexts.parameter_facts` | Source instance evidence can cross an exact plain-method or ordinary helper edge. Scan checks matching incoming instances on each expanded context; missing, mixed or invalidated facts remain boundaries. This does not establish heap contents or arbitrary runtime dispatch. |
-| Class lookup preservation | partial `class_attribute_write_set` effects, `class_lookup_mutations`, binding `lookup_preservation` / `lookup_hierarchy` | Scan validates the bounded writes, unaffected lookup, source hashes and matching incoming state. Written methods, lost state, dynamic names and unproved effects remain boundaries. A partial class effect does not establish cache values or carrier effects. |
+| Class lookup preservation | partial `class_attribute_write_set` effects, `class_lookup_mutations`, binding `lookup_preservation` / `lookup_hierarchy` | Scan validates the bounded writes, unaffected lookup, source hashes and matching incoming state. Written methods, lost state, unbounded names and unproved effects remain boundaries. A partial class effect does not establish cache values or carrier effects. |
 | Source class arguments | provenance `source_class_origin`, `analysis_contexts.parameter_facts`, `class_method_bindings` | Exact helper expansion retains the producer's source class origin and incoming edge. A shared reader validates matching target, snapshot hashes, assumption boundaries and incoming binding contexts. Class origin alone does not establish attribute lookup, effects, complete argument binding or runtime dispatch. |
 | Constructor invocation | `constructor_bindings`, implicit `constructor_class` / `constructor_instance` argument, `body_execution` | Partial; scan can enter a proven synchronous source `__new__`, or a source `__init__` selected after ordinary builtin allocation, with the actual receiver. The reader matches call/source hashes, implicit binding, phase and incoming contexts. It does not establish initialized state, later phases after a custom allocator or complete construction. Assessment retains those lifecycle boundaries. |
 | Special source binding | optional `class_method_bindings`, `callable_instance_evidence`, function `decorator_effects` | Partial; source snapshot assumptions remain distinct from runtime confirmation. Missing/conflicting proofs stay unresolved. |
@@ -64,6 +64,13 @@ selected phase/target, implicit parameter, hashes and assumption boundary. Class
 queries retain distinct producer and scan cache entries from generic method
 queries, even when they share an implementation. Missing or conflicting entry
 facts stop resolution. Assessment preserves the allocator lifecycle boundary.
+
+Finite class-write sets may include producer-proven local string concatenations
+and subsequent reads of builtin literal payloads definitely written by that same
+helper. Scan consumes the unaffected-lookup proof without reconstructing names or
+descriptor behavior. Existing descriptors, conditional cache initialization and
+unknown replacement values still require producer evidence. Such partial facts
+do not establish complete helper effects or selected-argument handling.
 
 The supported development combination is recorded with an exact producer
 commit in the reproducibility manifest. The package requirement alone does
