@@ -4,6 +4,15 @@
 
 ## Interpreting scan results
 
+For a bounded source helper, PCResolve may prove that a finite set of string
+keys can change while all other dictionary entries retain their input origins.
+Scan can follow that remaining open space. The affected keys remain incomplete;
+`pcresolve_mapping_values_partial` keeps coverage limited. A tuple-returning
+helper requires an exact supported slot. An unknown slot, clear, finite rebuild,
+escape or unsupported mutation does not regain an open source from object
+identity. These structural facts do not establish a selected argument's handling
+state in assessment.
+
 A positive finding records an API's variadic container reaching an expansion
 into a downstream signature without the corresponding variadic parameter.
 `has_vpp` is true when the findings collection is nonempty.

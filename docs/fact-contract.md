@@ -23,6 +23,13 @@ source evidence, completion status and absence of conflicting boundaries.
 Optional source binding and protocol evidence remains subject to its existing
 exact-identity checks. A missing optional proof does not license that operation.
 
+An optional `mapping_remainder` effect preserves only input entries outside
+finite possibly changed keys. Scan checks the exact call, binding, object,
+source witness, exclusions and assumptions before following current remaining
+origins. Partial object identity cannot restore a prior input snapshot. The
+retained `mapping_values_partial` boundary prevents treating this subset as
+complete mapping contents or a selected-argument handling proof.
+
 ## Current capability matrix
 
 “Available” means that a representation exists. “Partial” means that only the

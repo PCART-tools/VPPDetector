@@ -253,3 +253,61 @@ class CallFacts:
     @property
     def boundaries(self):
         return tuple(b for b in self.analysis.boundaries if b.get("call_id") == self.call.id)
+
+
+def preserved_mapping_remainder(analysis, call, value):
+    """Admit only current sources outside a producer's finite affected keys."""
+
+    if (call.analysis_status != 'analyzed' or target_status(analysis, call) != 'resolved'
+            or call.target is None or not CallFacts(analysis, call).complete_binding
+            or len(call.effects) != 1):
+        return False
+    effect = call.effects[0]
+    if (effect.get('kind') != 'mapping_remainder'
+            or effect.get('operation') != 'preserve_unaffected_keys'
+            or effect.get('completion') != 'normal_return'
+            or effect.get('status') != 'bounded'
+            or effect.get('value_completeness') != 'unaffected_keys_only'
+            or effect.get('call_id') != call.id
+            or identity_from_target(effect.get('function')) != identity_from_target(call.target)
+            or not effect.get('evidence')
+            or effect.get('assumptions') != [
+                'fresh_unescaped_builtin_dict', 'source_snapshot_bindings_hold',
+                'no_external_monkeypatch_or_import_hook', 'no_reflective_frame_access']
+            or any(b.get('reason') in ('mapping_effect_unproven', 'mapping_remainder_budget',
+                                       'mapping_effect_budget', 'container_effect_unknown')
+                   for b in CallFacts(analysis, call).boundaries)):
+        return False
+    binding = effect.get('binding', {})
+    arguments = [a for a in call.argument_sources if a.get('parameter') == effect.get('parameter')]
+    witness = effect.get('call_evidence', {})
+    if (binding.get('status') != 'exact' or binding not in call.parameter_bindings
+            or binding.get('parameter') != effect.get('parameter')
+            or len(arguments) != 1
+            or arguments[0].get('container_binding', {}).get('source')
+            != effect.get('object_source')
+            or arguments[0].get('container_binding', {}).get('shape') != 'dict'
+            or Path(witness.get('file_path', '')) != Path(call.caller.file_path)
+            or _location(witness) != (call.lineno, call.col_offset,
+                                      call.end_lineno, call.end_col_offset)):
+        return False
+    paths = effect.get('excluded_paths')
+    if (not isinstance(paths, list) or len(paths) > 64
+            or not all(isinstance(path, list) and len(path) == 1 and isinstance(path[0], str)
+                       for path in paths)):
+        return False
+    returned = effect.get('return_object', {})
+    route = effect.get('return_path')
+    if (returned.get('identity') != 'argument_alias'
+            or returned.get('source') != effect.get('object_source')
+            or returned.get('parameter') != effect.get('parameter')
+            or returned.get('value_completeness') != 'unaffected_keys_only'
+            or identity_from_target(returned.get('function')) != identity_from_target(call.target)
+            or not (route is None or route == [] or isinstance(route, list) and len(route) == 1
+                    and type(route[0]) is int and route[0] >= 0)):
+        return False
+    if value.get('object_only'):
+        return value.get('container_object', {}).get('source') == effect.get('object_source')
+    return (value.get('kind') in ('parameter', 'capture')
+            and any(root.get('name') == value.get('source') for root in effect.get('mapping', []))
+            and all(path in value.get('excluded_paths', []) for path in paths))

@@ -19,6 +19,7 @@ from ._program_facts import (
     direct_calls,
     identity_from_target,
     immediate_body,
+    preserved_mapping_remainder,
 )
 from ._program_facts import (
     target_status as _target_status,
@@ -965,6 +966,11 @@ def _returned_flows(
             )
             return None
         obj = value.get("container_object", {})
+        if obj.get('value_completeness') == 'unaffected_keys_only' and not (
+                preserved_mapping_remainder(owner_analysis, producer, value)):
+            boundary('return_object_unproven',
+                     'Mapping remainder evidence is incomplete.', producer)
+            return None
         protocol = copy_protocol_target(owner, owner_analysis, producer, value)
         if protocol is None and (not _proven_object_alias(value) or (
             producer.analysis_status != "analyzed"
@@ -1142,7 +1148,8 @@ def _return_operation_boundary(
             continue
         # This narrow PCResolve proof already excludes unknown helper effects.
         # It is not a purity inference from a name or an input dependency.
-        if call.result_sources and all(
+        remainder = any(effect.get('kind') == 'mapping_remainder' for effect in call.effects)
+        if call.result_sources and not remainder and all(
             _proven_object_alias(source) for source in call.result_sources
         ):
             continue
@@ -1154,6 +1161,11 @@ def _return_operation_boundary(
             # Only remove the unknown-effect barrier. Current content facts,
             # not this normal-return postcondition, still determine forwarding.
             continue
+        if preserved_mapping_remainder(analysis, call, value):
+            continue
+        if (value.get('source') == call.id and value.get('container_object', {}).get(
+                'value_completeness') == 'unaffected_keys_only'):
+            return call_span(call)
         receiver = call.receiver_sources if call.target_status == "receiver_unresolved" else ()
         ordinary = (
             source
