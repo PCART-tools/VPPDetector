@@ -20,6 +20,7 @@ from ._program_facts import (
     identity_from_target,
     immediate_body,
     preserved_mapping_remainder,
+    source_classmethod_binding,
 )
 from ._program_facts import (
     target_status as _target_status,
@@ -190,6 +191,11 @@ def scan_function(
             if any(boundary.get("call_id") == call.id
                    and boundary.get("reason") == "callable_identity_incomplete"
                    for boundary in analysis.boundaries):
+                targets = ()
+            if (any(value.get("kind") == "parameter" and value.get("source_class_origin")
+                    for value in call.receiver_sources)
+                    and source_classmethod_binding(analysis, call) is None):
+                # A propagated class identity does not itself prove attribute lookup.
                 targets = ()
             if not targets:
                 boundaries.append(
@@ -514,7 +520,10 @@ def _expand_body(
         )
         incoming_literal = any(argument.get("literal") is not None
                                for argument in call.argument_sources)
-        if (not required and not incoming_callable and not incoming_literal
+        incoming_class = any(value.get("source_class_origin") and value.get("class_type")
+                             for argument in call.argument_sources
+                             for value in argument.get("sources", ()))
+        if (not required and not incoming_callable and not incoming_literal and not incoming_class
                 and not getattr(call, "capture_bindings", ())):
             # Instance-method source candidates and ordinary helpers retain
             # the existing nominal body analysis. Never use this fallback for

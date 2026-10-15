@@ -234,6 +234,46 @@ def target_status(analysis: Any, call: Any) -> str:
     return "resolved"
 
 
+def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
+    """Read a source binding proof tied to this call and every incoming context."""
+
+    bindings = getattr(call, "class_method_bindings", ())
+    if call.target_status != "classmethod" or call.target is None or len(bindings) != 1:
+        return None
+    binding = bindings[0]
+    if (not isinstance(binding, dict)
+            or not isinstance(binding.get("descriptor"), dict)
+            or not isinstance(binding.get("implicit_binding"), dict)
+            or not isinstance(binding.get("source_hashes"), dict)):
+        return None
+    receiver_boundaries = [boundary for boundary in analysis.boundaries
+        if boundary.get("call_id") == call.id
+        and boundary.get("reason") == "dynamic_class_receiver_override_possible"]
+    hashes = binding.get("source_hashes", {})
+    valid = (
+        binding.get("status") == "source_bound"
+        and binding.get("basis") == "source_snapshot"
+        and not binding.get("issues")
+        and binding.get("runtime_target_confirmed") is False
+        and binding.get("target") is not None
+        and identity_from_target(binding["target"]) == identity_from_target(call.target)
+        and binding.get("descriptor", {}).get("kind") == "builtin_classmethod"
+        and binding.get("implicit_binding", {}).get("status") == "static_bound"
+        and binding.get("implicit_binding", {}).get("receiver_class")
+        == binding.get("receiver_class")
+        and bool(hashes)
+        and all(analysis.inputs.get("sha256", {}).get(path) == digest
+                for path, digest in hashes.items())
+        and bool(receiver_boundaries)
+        and all(boundary.get("boundary_kind") == "assumption"
+                and boundary.get("binding_status") == "source_bound"
+                for boundary in receiver_boundaries)
+        and all(isinstance(incoming, dict) and incoming.get("target") == binding["target"]
+                and incoming.get("class_method_bindings") == bindings
+                for incoming in getattr(call, "analysis_contexts", ())))
+    return binding if valid else None
+
+
 
 @dataclass(frozen=True)
 class CallFacts:

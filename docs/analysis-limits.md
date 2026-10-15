@@ -107,7 +107,15 @@ These facts describe source-conditioned paths, not unconditional runtime targets
 
 Classmethod and `__new__` helper forwarding retains source-proven incoming
 receiver contexts. Ordinary helpers retain incoming source-callable bindings
-when PCResolve provides an exact call-edge context.
+and source-class argument origins when PCResolve provides an exact call-edge
+context. A source class can pass through multiple ordinary helpers to a fixed
+classmethod signature only with a matching source binding proof. Both consumers
+validate the call target, snapshot hashes and every incoming binding context.
+Custom lookup remains unconfirmed even when the class identity is known.
+Class writes/deletes and unknown effects on receivers, captures or local
+containers invalidate this binding route. A nominal class on a generic method entry does
+not establish its actual receiver. Constructor entry binding and mutable runtime
+configuration can still stop this route.
 
 Missing or mixed incoming contexts remain boundaries. Mutable configuration
 attributes and class-context container returns are not inferred. Callable

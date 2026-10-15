@@ -42,6 +42,7 @@ from ._program_facts import (
     direct_calls,
     identity_from_target,
     immediate_body,
+    source_classmethod_binding,
 )
 from ._program_facts import (
     target_status as _target_status,
@@ -1113,49 +1114,17 @@ class _Frame:
                     node,
                     identity_from_target(facts.target),
                 )
-        source_binding = False
-        bindings = getattr(facts, "class_method_bindings", ())
-        if status == "classmethod" and len(bindings) == 1:
-            binding = bindings[0]
-            receiver_boundaries = [
-                boundary
-                for boundary in self.analysis.boundaries
-                if boundary.get("call_id") == facts.id
-                and boundary.get("reason") == "dynamic_class_receiver_override_possible"
-            ]
-            source_binding = (
-                binding.get("status") == "source_bound"
-                and binding.get("basis") == "source_snapshot"
-                and not binding.get("issues")
-                and binding.get("runtime_target_confirmed") is False
-                and binding.get("target") is not None
-                and identity_from_target(binding["target"]) == identity_from_target(facts.target)
-                and binding.get("descriptor", {}).get("kind") == "builtin_classmethod"
-                and binding.get("implicit_binding", {}).get("status") == "static_bound"
-                and binding.get("implicit_binding", {}).get("receiver_class")
-                == binding.get("receiver_class")
-                and bool(receiver_boundaries)
-                and all(
-                    boundary.get("boundary_kind") == "assumption"
-                    and boundary.get("binding_status") == "source_bound"
-                    for boundary in receiver_boundaries
-                )
-                and all(
-                    incoming.get("target") == binding["target"]
-                    and incoming.get("class_method_bindings") == bindings
-                    for incoming in getattr(facts, "analysis_contexts", ())
-                )
+        source_binding = source_classmethod_binding(self.analysis, facts)
+        if source_binding is not None:
+            # Source-snapshot binding is conditional evidence, not a runtime observation.
+            dynamic.discard("dynamic_class_receiver_override_possible")
+            self.proof.note(
+                self.function,
+                "source_classmethod_binding",
+                "; ".join(source_binding.get("assumptions", ())),
+                node,
+                identity_from_target(facts.target),
             )
-            if source_binding:
-                # Source-snapshot binding is conditional evidence, not a runtime observation.
-                dynamic.discard("dynamic_class_receiver_override_possible")
-                self.proof.note(
-                    self.function,
-                    "source_classmethod_binding",
-                    "; ".join(binding.get("assumptions", ())),
-                    node,
-                    identity_from_target(facts.target),
-                )
         if confirmed is not None:
             # A method observation resolves this target only, not decorator
             # effects, metaclass construction, binding or later body behavior.
