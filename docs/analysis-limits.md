@@ -129,8 +129,13 @@ following the body. Deferred allocator bodies remain boundaries. Class/base
 escapes, allocator writes, custom lookup, invalid binding and conflicting facts
 cannot license that route. The proof supplies no initialized instance state or
 later constructor phases, so assessment retains `dynamic_construction` even
-when scan has an allocator-body witness. Bare constructor API queries and
-constructor selection involving multiple phases still need separate evidence.
+when scan has an allocator-body witness. For explicit class calls, PCResolve
+selects the MRO allocator before an initializer. An inherited `__new__` therefore
+takes precedence over a direct `__init__`. Scan follows only the supported
+selected phase: it does not infer an initializer edge from a class identity.
+`pcresolve_constructor_initialization_unmodeled` retains the later-phase gap,
+including when a source allocator returns an instance that Python initializes.
+Bare constructor API queries still need separate binding evidence.
 
 When a decorated callable has a proven identity but unmodeled effects, the
 scanner does not use its body to prove container returns or further

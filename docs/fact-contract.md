@@ -51,6 +51,11 @@ complete Python semantics.
 | Execution phase | optional `implicit_protocol`, generator markers and boundaries | Partial synchronous support; arbitrary async/generator lifetime and exceptional completion remain unsupported. |
 | Analysis completeness | root/call boundaries, `analysis_status`, configured budgets | Partial explicit limits; there is no global safe/no-flow certificate. |
 
+For explicit source class calls, PCResolve selects an MRO allocator before
+considering an initializer. Scan consumes that selected phase without adding
+an initializer edge. `constructor_initialization_unmodeled` preserves the
+later-phase coverage gap; it is not evidence that initialization executes.
+
 The supported development combination is recorded with an exact producer
 commit in the reproducibility manifest. The package requirement alone does
 not establish support for every optional fact. A minimum supported release
