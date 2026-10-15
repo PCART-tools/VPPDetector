@@ -415,9 +415,14 @@ class _Proof:
                 function, "deferred_execution", "Async/generator execution is not modeled."
             )
         try:
-            analysis = analysis or self.context.adapter.analyze(function.identity)
+            analysis = analysis or self.context.adapter.analyze(
+                function.query_class or function.identity)
         except ResolutionError as exc:
             self.unknown(function, exc.code, str(exc))
+        if (function.query_class is not None
+                and analysis.inputs.get("entry_binding", {}).get("phase") == "__new__"):
+            self.unknown(function, "dynamic_construction",
+                         "Later constructor phases are unmodeled.")
         if function.node.decorator_list and not self.decoration_preserved(function, analysis):
             self.unknown(function, "decorated_entry", "Entry/body decoration is not proven.")
         frame = _Frame(

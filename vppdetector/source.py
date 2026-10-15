@@ -44,6 +44,7 @@ class IndexedFunction:
     node: FunctionNode
     is_overload: bool
     is_bound_method: bool = False
+    query_class: Optional[FunctionIdentity] = None
 
     @property
     def variadic_parameters(self) -> Tuple[Tuple[str, VariadicKind], ...]:
@@ -135,6 +136,19 @@ class SourceIndex:
             item.function for item in self.constructors if item.class_identity == class_identity
         ]
         return constructors[0] if len(constructors) == 1 else None
+
+    def resolve_class(self, identity: FunctionIdentity) -> Optional[FunctionIdentity]:
+        """Locate a source class; invocation phase selection belongs to PCResolve."""
+
+        if identity.file_path or identity.lineno:
+            candidates = [item for item in self.classes
+                if item.module == identity.module and item.qualname == identity.qualname
+                and (not identity.file_path or item.file_path == identity.file_path.resolve())
+                and (not identity.lineno or item.lineno == identity.lineno)]
+            return candidates[0] if len(candidates) == 1 else None
+        return self._definitions().resolve_name(
+            identity.module, "", identity.qualname, self.imports, kind="class"
+        )
 
     def resolve_method_identity(self, identity: FunctionIdentity) -> Optional[FunctionIdentity]:
         """Canonicalize a class prefix; PCResolve still owns inherited lookup."""
@@ -284,8 +298,8 @@ class _FunctionCollector(ast.NodeVisitor):
         )
         self.classes.append(class_identity)
         constructor = None
-        # Match PCResolve's source constructor preference without inferring
-        # metaclass behavior: direct __init__, otherwise direct __new__.
+        # Keep nominal constructor locations for source-position lookup.
+        # AnalysisContext asks PCResolve for actual class invocation phases.
         for method in ("__init__", "__new__"):
             candidates = [
                 item

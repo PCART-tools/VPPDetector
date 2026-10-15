@@ -47,7 +47,7 @@ Supported analysis includes:
 
 - Functions, methods and `async def`.
 - Cross-file imports, aliases, public class re-exports and inherited methods.
-- Source constructor entries using `__init__`, otherwise `__new__`.
+- Source class entries with PCResolve-proven allocator or ordinary initializer binding.
 - Bounded multi-hop forwarding through ordinary mapping or sequence parameters.
 - Source-resolved helpers returning a whole container, including selection
   through exact nonnegative tuple return slots.
@@ -135,7 +135,11 @@ takes precedence over a direct `__init__`. Scan follows only the supported
 selected phase: it does not infer an initializer edge from a class identity.
 `pcresolve_constructor_initialization_unmodeled` retains the later-phase gap,
 including when a source allocator returns an instance that Python initializes.
-Bare constructor API queries still need separate binding evidence.
+Class API queries use PCResolve's entry binding to retain the actual class,
+including inherited allocators and method overrides. The consumer checks phase,
+receiver, MRO, source hashes and implicit parameter before entering the body.
+Missing entry facts, custom/deferred allocation and unknown construction remain
+resolution boundaries. Generic method queries retain their separate contexts.
 
 When a decorated callable has a proven identity but unmodeled effects, the
 scanner does not use its body to prove container returns or further

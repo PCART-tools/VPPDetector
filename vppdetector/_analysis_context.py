@@ -6,8 +6,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional, Sequence, Union
 
-from ._fact_adapter import PCResolveAdapter
-from ._program_facts import identity_from_target
+from ._fact_adapter import PCResolveAdapter, ResolutionError
+from ._program_facts import identity_from_target, source_constructor_entry_binding
 from .models import FunctionIdentity, SourceContext
 from .source import IndexedFunction, SourceIndex, build_source_index, normalized_import_roots
 
@@ -46,7 +46,22 @@ class AnalysisContext:
         return cls(index=index, adapter=PCResolveAdapter(index))
 
     def resolve_api(self, identity: FunctionIdentity) -> Optional[IndexedFunction]:
-        entry = self.index.find(identity) or self.index.resolve_imported(identity)
+        entry = self.index.find(identity)
+        if entry is not None:
+            return entry
+        source_class = self.index.resolve_class(identity)
+        if source_class is not None:
+            analysis = self.adapter.analyze(source_class)
+            fact = source_constructor_entry_binding(analysis, source_class)
+            entry = self.index.find(identity_from_target(analysis.entry))
+            parameters = (entry.node.args.posonlyargs + entry.node.args.args) if entry else ()
+            if (fact is None or not parameters
+                    or fact["implicit_binding"]["parameter"] != parameters[0].arg):
+                raise ResolutionError(
+                    "Source class invocation binding is unavailable or unconfirmed.",
+                    "constructor_entry_unconfirmed")
+            return replace(entry, query_class=source_class, is_bound_method=True)
+        entry = self.index.resolve_imported(identity)
         if entry is not None:
             return entry
         if identity.file_path or identity.lineno:

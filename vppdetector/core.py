@@ -80,7 +80,7 @@ def scan_function(
     compatibility decision or a claim of guaranteed runtime failure.
     """
 
-    cache_key = (entry.identity, max_depth)
+    cache_key = (entry.identity, max_depth, entry.query_class)
     if cache_key in context._scan_cache:
         return context._scan_cache[cache_key]
     pending = [_State(entry, name, name, kind) for name, kind in entry.variadic_parameters]
@@ -92,7 +92,8 @@ def scan_function(
         boundary_start = len(boundaries)
         identity = state.function.identity
         try:
-            analysis = state.analysis or context.adapter.analyze(identity)
+            analysis = state.analysis or context.adapter.analyze(
+                state.function.query_class or identity)
         except ResolutionError as exc:
             boundaries.append(_root_boundary(
                 AnalysisBoundary(exc.code, str(exc), identity), entry, state

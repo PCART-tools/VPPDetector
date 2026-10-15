@@ -56,6 +56,13 @@ considering an initializer. Scan consumes that selected phase without adding
 an initializer edge. `constructor_initialization_unmodeled` preserves the
 later-phase coverage gap; it is not evidence that initialization executes.
 
+Class API queries consume optional `inputs.entry_binding` instead of selecting
+an initializer in the consumer. The reader matches the actual class, source MRO,
+selected phase/target, implicit parameter, hashes and assumption boundary. Class
+queries retain distinct producer and scan cache entries from generic method
+queries, even when they share an implementation. Missing or conflicting entry
+facts stop resolution. Assessment preserves the allocator lifecycle boundary.
+
 The supported development combination is recorded with an exact producer
 commit in the reproducibility manifest. The package requirement alone does
 not establish support for every optional fact. A minimum supported release

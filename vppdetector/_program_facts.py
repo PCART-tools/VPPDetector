@@ -275,6 +275,62 @@ def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
     return binding if valid else None
 
 
+def source_constructor_entry_binding(analysis: Any, requested: FunctionIdentity) -> Optional[dict]:
+    """Validate a class-query binding separately from an actual call-site proof."""
+
+    fact = analysis.inputs.get("entry_binding")
+    if not isinstance(fact, dict):
+        return None
+    implicit = fact.get("implicit_binding")
+    hashes = fact.get("source_hashes")
+    evidence = fact.get("definition_evidence")
+    hierarchy = fact.get("hierarchy")
+    if (not isinstance(implicit, dict) or not isinstance(hashes, dict)
+            or not isinstance(evidence, dict)
+            or not isinstance(hierarchy, (list, tuple)) or not 1 <= len(hierarchy) <= 64
+            or not isinstance(fact.get("assumptions"), (list, tuple))
+            or not all(isinstance(item, str) for item in fact["assumptions"])):
+        return None
+    try:
+        receiver = identity_from_target(fact["receiver_class"])
+        target = identity_from_target(fact["target"])
+        owners = tuple(identity_from_target(item) for item in hierarchy)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if receiver is None or target is None or any(owner is None for owner in owners):
+        return None
+    phase = fact.get("phase")
+    assumptions = {"source_snapshot_bindings_hold", "builtin_type_call_and_new_binding",
+                   "no_external_monkeypatch_or_import_hook", "no_unmodeled_indirect_class_mutation"}
+    valid = (
+        fact.get("query_kind") == "source_class_call" and fact.get("basis") == "source_snapshot"
+        and fact.get("status") == "source_bound" and not fact.get("issues")
+        and fact.get("runtime_target_confirmed") is False
+        and fact.get("instance_state") == "unmodeled"
+        and receiver == requested and target == identity_from_target(analysis.entry)
+        and owners[0] == receiver and len(set(owners)) == len(owners)
+        and phase in ("__new__", "__init__") and target.qualname.endswith("." + phase)
+        and fact.get("execution_scope") == ("new_invocation_only" if phase == "__new__"
+                                            else "init_invocation_only")
+        and fact.get("body_execution") == "synchronous" and implicit.get("status") == "static_bound"
+        and isinstance(implicit.get("parameter"), str)
+        and implicit.get("value_kind") == ("class" if phase == "__new__" else "instance")
+        and bool(hashes) and str(receiver.file_path) in hashes and str(target.file_path) in hashes
+        and all(str(owner.file_path) in hashes for owner in owners)
+        and all(isinstance(path, str) and isinstance(digest, str)
+                for path, digest in hashes.items())
+        and all(analysis.inputs.get("sha256", {}).get(path) == digest
+                for path, digest in hashes.items())
+        and Path(evidence.get("file_path", "")) == receiver.file_path
+        and evidence.get("lineno") == receiver.lineno
+        and assumptions.issubset(fact["assumptions"])
+        and any(b.get("reason") == "source_constructor_entry_binding"
+                and b.get("boundary_kind") == "assumption"
+                and b.get("function") == fact["target"] for b in analysis.boundaries)
+    )
+    return fact if valid else None
+
+
 def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
     """Read a source-only __new__ invocation proof, never initialized state."""
 
