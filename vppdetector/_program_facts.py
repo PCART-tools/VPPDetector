@@ -238,7 +238,8 @@ def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
     """Read a source binding proof tied to this call and every incoming context."""
 
     bindings = getattr(call, "class_method_bindings", ())
-    if call.target_status != "classmethod" or call.target is None or len(bindings) != 1:
+    if (not isinstance(bindings, (list, tuple)) or call.target_status != "classmethod"
+            or call.target is None or len(bindings) != 1):
         return None
     binding = bindings[0]
     if (not isinstance(binding, dict)
@@ -271,6 +272,65 @@ def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
         and all(isinstance(incoming, dict) and incoming.get("target") == binding["target"]
                 and incoming.get("class_method_bindings") == bindings
                 for incoming in getattr(call, "analysis_contexts", ())))
+    return binding if valid else None
+
+
+def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
+    """Read a source-only __new__ invocation proof, never initialized state."""
+
+    bindings = getattr(call, "constructor_bindings", ())
+    if (not isinstance(bindings, (list, tuple))
+            or call.target_status != "constructor" or call.target is None
+            or call.binding_status == "invalid" or len(bindings) != 1):
+        return None
+    binding = bindings[0]
+    if (not isinstance(binding, dict)
+            or not isinstance(binding.get("implicit_binding"), dict)
+            or not isinstance(binding.get("source_hashes"), dict)
+            or not isinstance(binding.get("receiver_class"), dict)
+            or not isinstance(binding.get("assumptions"), (list, tuple))
+            or not isinstance(binding.get("call_evidence"), dict)):
+        return None
+    implicit = binding["implicit_binding"]
+    slot = {"constructor_class": True}
+    arguments = [a for a in call.argument_sources if a.get("argument") == slot
+                 and a.get("parameter") == implicit.get("parameter")]
+    records = [r for r in call.parameter_bindings if r.get("argument") == slot]
+    values = [v for argument in arguments for v in argument.get("sources", ())]
+    witness = binding["call_evidence"]
+    assumptions = {"source_snapshot_bindings_hold", "builtin_type_call_and_new_binding",
+                   "no_external_monkeypatch_or_import_hook",
+                   "no_unmodeled_indirect_class_mutation"}
+    valid = (
+        binding.get("status") == "source_bound" and binding.get("basis") == "source_snapshot"
+        and not binding.get("issues") and binding.get("runtime_target_confirmed") is False
+        and binding.get("phase") == "__new__"
+        and binding.get("execution_scope") == "new_invocation_only"
+        and binding.get("instance_state") == "unmodeled"
+        and binding.get("body_execution") in ("synchronous", "deferred")
+        and binding.get("target") is not None
+        and identity_from_target(binding["target"]) == identity_from_target(call.target)
+        and implicit.get("status") == "static_bound" and implicit.get("argument") == slot
+        and implicit.get("receiver_class") == binding.get("receiver_class")
+        and len(records) == len(arguments) == 1 and records[0].get("status") == "exact"
+        and records[0].get("parameter") == implicit.get("parameter")
+        and bool(values) and all(v.get("class_type") == binding.get("receiver_class")
+            and v.get("relation") == "direct" and not any(v.get(flag) for flag in (
+                "projection", "output_path", "value_incomplete", "import_modified",
+                "import_incomplete")) for v in values)
+        and Path(witness.get("file_path", "")) == Path(call.caller.file_path)
+        and _location(witness) == (call.lineno, call.col_offset,
+                                  call.end_lineno, call.end_col_offset)
+        and bool(binding["source_hashes"])
+        and all(analysis.inputs.get("sha256", {}).get(path) == digest
+                for path, digest in binding["source_hashes"].items())
+        and assumptions.issubset(binding.get("assumptions", ()))
+        and any(b.get("call_id") == call.id and b.get("reason") == "source_constructor_new_binding"
+                and b.get("boundary_kind") == "assumption"
+                and b.get("execution_scope") == "new_invocation_only" for b in analysis.boundaries)
+        and all(item.get("target") == binding["target"]
+                and item.get("constructor_bindings") == bindings
+                for item in call.analysis_contexts))
     return binding if valid else None
 
 

@@ -21,6 +21,7 @@ from ._program_facts import (
     immediate_body,
     preserved_mapping_remainder,
     source_classmethod_binding,
+    source_constructor_binding,
 )
 from ._program_facts import (
     target_status as _target_status,
@@ -197,6 +198,12 @@ def scan_function(
                     and source_classmethod_binding(analysis, call) is None):
                 # A propagated class identity does not itself prove attribute lookup.
                 targets = ()
+            constructor_fact = source_constructor_binding(analysis, call)
+            if ((getattr(call, "constructor_bindings", ())
+                    or call.target_status == "constructor" and selected is not None
+                    and selected.qualname.endswith(".__new__"))
+                    and constructor_fact is None):
+                targets = ()
             if not targets:
                 boundaries.append(
                     AnalysisBoundary(
@@ -290,6 +297,14 @@ def scan_function(
                                 span,
                             )
                         )
+                        continue
+                    if (constructor_fact is not None
+                            and constructor_fact["body_execution"] != "synchronous"):
+                        boundaries.append(AnalysisBoundary(
+                            "deferred_callee_body_not_followed",
+                            "The bound allocator body executes in a deferred phase.",
+                            identity, span,
+                        ))
                         continue
                     body_boundaries = _callee_body_boundaries(analysis, call)
                     if body_boundaries:

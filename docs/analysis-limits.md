@@ -122,6 +122,16 @@ attributes and class-context container returns are not inferred. Callable
 targets are not inferred from names or strings. Ambiguous constructor
 definitions are not replaced with a guessed entry.
 
+An explicit source class call can carry PCResolve's exact implicit class binding
+into a supported synchronous `__new__`. Scan validates its
+`constructor_bindings`, invocation phase, snapshot and incoming contexts before
+following the body. Deferred allocator bodies remain boundaries. Class/base
+escapes, allocator writes, custom lookup, invalid binding and conflicting facts
+cannot license that route. The proof supplies no initialized instance state or
+later constructor phases, so assessment retains `dynamic_construction` even
+when scan has an allocator-body witness. Bare constructor API queries and
+constructor selection involving multiple phases still need separate evidence.
+
 When a decorated callable has a proven identity but unmodeled effects, the
 scanner does not use its body to prove container returns or further
 forwarding. A direct expansion against its nominal signature can still produce
