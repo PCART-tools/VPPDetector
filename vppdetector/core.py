@@ -567,10 +567,32 @@ def _expand_body(
         # PCResolve's top-level calls merge incoming contexts. Do not combine
         # a target from one edge with container facts from another. Keep the
         # narrow single-edge case; mixed snapshots remain explicit boundaries.
+        ordinary = (*definition.signature.positional_only,
+                    *definition.signature.positional_or_keyword,
+                    *definition.signature.keyword_only)
+        instances = {}
+        for argument in call.argument_sources:
+            parameter = argument.get("parameter")
+            if parameter in ordinary:
+                for value in argument.get("sources", ()):
+                    if value.get("instance_type"):
+                        instances.setdefault(parameter, []).append(value["instance_type"])
+                        if value.get("value_incomplete") or argument.get("target_path"):
+                            raise ResolutionError("Incoming instance binding is incomplete.")
         for inner in direct_calls(child, definition.identity):
             contexts = getattr(inner, "analysis_contexts", ())
             if not contexts or any(item.get("incoming_call_id") != call.id for item in contexts):
                 raise ResolutionError("Mixed incoming callable contexts cannot prove one path.")
+            for item in contexts:
+                for parameter, types in instances.items():
+                    values = item.get("parameter_facts", {}).get(parameter, ())
+                    if (not values or any(value.get("instance_type") not in types
+                            or value.get("value_incomplete") for value in values)
+                            or any(identity not in [value.get("instance_type") for value in values]
+                                   for identity in types)):
+                        raise ResolutionError(
+                            "Incoming instance context is incomplete or conflicting."
+                        )
         constructor = source_constructor_binding(analysis, call)
         if constructor is not None and constructor["phase"] == "__init__":
             parameter = constructor["implicit_binding"]["parameter"]
@@ -578,14 +600,6 @@ def _expand_body(
                           *definition.signature.positional_or_keyword)
             if not positional or positional[0] != parameter:
                 raise ResolutionError("Initializer implicit receiver binding is unavailable.")
-            for inner in direct_calls(child, definition.identity):
-                for item in inner.analysis_contexts:
-                    values = item.get("parameter_facts", {}).get(parameter, ())
-                    if not values or any(value.get("instance_type") != constructor["receiver_class"]
-                                         or value.get("value_incomplete") for value in values):
-                        raise ResolutionError(
-                            "Initializer instance context is incomplete or conflicting."
-                        )
         return child
     receivers = _receiver_contexts(child, definition.identity)
     if len(receivers) > 1:
