@@ -195,10 +195,12 @@ def scan_function(
                    for boundary in analysis.boundaries):
                 targets = ()
             if (any(value.get("kind") == "parameter" and value.get("source_class_origin")
+                    or value.get("class_type") and value.get("class_lookup_mutations")
                     for value in call.receiver_sources)
-                    and source_classmethod_binding(analysis, call) is None):
-                # A propagated class identity does not itself prove attribute lookup.
-                targets = ()
+                    or any("lookup_preservation" in fact
+                           for fact in getattr(call, "class_method_bindings", ()))):
+                if source_classmethod_binding(analysis, call) is None:
+                    targets = ()
             constructor_fact = source_constructor_binding(analysis, call)
             if ((getattr(call, "constructor_bindings", ())
                     or call.target_status == "constructor" and selected is not None
@@ -563,6 +565,25 @@ def _expand_body(
     ]
     if len(summaries) != 1:
         raise ResolutionError("Callee-body expansion is unavailable or budget-limited.")
+    class_states = [(argument.get("parameter"), value,
+                     "class_type" if value.get("class_type") else "instance_type")
+                    for argument in call.argument_sources for value in argument.get("sources", ())
+                    if (value.get("class_type") or value.get("instance_type"))
+                    and value.get("class_lookup_mutations")]
+    if class_states:
+        for inner in direct_calls(child, definition.identity):
+            contexts = getattr(inner, "analysis_contexts", ())
+            if not contexts:
+                raise ResolutionError("Incoming class lookup state is unavailable.")
+            for incoming in contexts:
+                for parameter, value, type_key in class_states:
+                    facts = incoming.get("parameter_facts", {}).get(parameter, ())
+                    if not facts or any(fact.get(type_key) != value[type_key]
+                            or fact.get("class_lookup_mutations") != value["class_lookup_mutations"]
+                            for fact in facts):
+                        raise ResolutionError(
+                            "Incoming class lookup state is incomplete or conflicting."
+                        )
     if not required:
         # PCResolve's top-level calls merge incoming contexts. Do not combine
         # a target from one edge with container facts from another. Keep the

@@ -234,6 +234,56 @@ def target_status(analysis: Any, call: Any) -> str:
     return "resolved"
 
 
+def _class_lookup_preserved(analysis: Any, call: Any, binding: dict) -> bool:
+    observed = []
+    for value in call.receiver_sources:
+        effects = value.get("class_lookup_mutations", ())
+        if not isinstance(effects, (list, tuple)):
+            return False
+        for effect in effects:
+            if effect not in observed:
+                observed.append(effect)
+    preserved = binding.get("lookup_preservation", ())
+    if not isinstance(preserved, (list, tuple)) or list(preserved) != observed:
+        return False
+    if not observed:
+        return True
+    hierarchy = binding.get("lookup_hierarchy")
+    if (not isinstance(hierarchy, (list, tuple)) or not 1 <= len(hierarchy) <= 64
+            or hierarchy[0] != binding.get("receiver_class")
+            or any(not isinstance(owner, dict) or owner.get("file_path") not in
+                   binding["source_hashes"] for owner in hierarchy)):
+        return False
+    assumptions = {"source_snapshot_bindings_hold", "builtin_type_attribute_writes",
+                   "no_external_monkeypatch_or_import_hook",
+                   "no_unmodeled_indirect_class_mutation"}
+    attribute = call.callee_name.rsplit(".", 1)[-1]
+    for effect in observed:
+        if not isinstance(effect, dict):
+            return False
+        names, hashes, claims = (effect.get("attributes"), effect.get("source_hashes"),
+                                  effect.get("assumptions"))
+        if (effect.get("kind") != "class_attribute_write_set" or effect.get("status") != "bounded"
+                or effect.get("preserved_scope") != "other_class_attributes"
+                or effect.get("completion") != "normal_return"
+                or effect.get("value_completeness") != "unmodeled"
+                or effect.get("receiver_class") not in hierarchy
+                or not isinstance(names, (list, tuple)) or len(names) > 2000
+                or any(not isinstance(name, str) or name in (attribute, "mro")
+                       or name.startswith("__") and name.endswith("__") for name in names)
+                or not isinstance(hashes, dict) or not hashes
+                or not isinstance(effect.get("target"), dict)
+                or effect["target"].get("file_path") not in hashes
+                or not isinstance(claims, (list, tuple))
+                or not all(isinstance(claim, str) for claim in claims)
+                or not assumptions.issubset(claims)
+                or any(binding["source_hashes"].get(path) != digest
+                       or analysis.inputs.get("sha256", {}).get(path) != digest
+                       for path, digest in hashes.items())):
+            return False
+    return True
+
+
 def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
     """Read a source binding proof tied to this call and every incoming context."""
 
@@ -265,6 +315,7 @@ def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
         and bool(hashes)
         and all(analysis.inputs.get("sha256", {}).get(path) == digest
                 for path, digest in hashes.items())
+        and _class_lookup_preserved(analysis, call, binding)
         and bool(receiver_boundaries)
         and all(boundary.get("boundary_kind") == "assumption"
                 and boundary.get("binding_status") == "source_bound"
