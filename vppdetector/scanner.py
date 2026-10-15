@@ -3,24 +3,31 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional, Sequence
 
-from .core import AnalysisContext, ResolutionError, scan_function
+from ._analysis_context import (
+    AnalysisContext,
+    PathLike,
+    ScanSource,
+)
+from ._analysis_context import (
+    prepare_context as _prepare_context,
+)
+from ._analysis_context import (
+    validate_depth as _validate_depth,
+)
+from ._fact_adapter import ResolutionError
+from .core import scan_function
 from .models import (
     AnalysisBoundary,
     ForwardingFinding,
     FunctionIdentity,
     ScanCoverageStatus,
     ScanReport,
-    SourceContext,
     VariadicCoverage,
     VariadicFunction,
 )
-from .source import IndexedFunction, SourceIndex, build_source_index, normalized_import_roots
-
-PathLike = Union[str, Path]
-ScanSource = Union[PathLike, SourceContext]
+from .source import IndexedFunction, SourceIndex
 
 
 def scan_package(
@@ -126,7 +133,8 @@ def _scan_entries(
                   if boundary.parameter_name == name and boundary.parameter_kind == kind),
             )
             unavailable = any(
-                boundary.code == "flow_analysis_failed" and boundary.function == entry.identity
+                boundary.code in {"flow_analysis_failed", "pcresolve_fact_contract_unavailable"}
+                and boundary.function == entry.identity
                 for boundary in channel_boundaries
             )
             status = (
@@ -150,38 +158,6 @@ def _scan_entries(
         analyzer_schema_version=schema_version,
         coverage=tuple(coverage),
     )
-
-
-def _prepare_context(
-    package_root: ScanSource,
-    import_roots: Optional[Sequence[PathLike]],
-    context: Optional[AnalysisContext],
-) -> tuple[SourceIndex, Optional[AnalysisContext]]:
-    if isinstance(package_root, SourceContext):
-        source = package_root
-        if import_roots is not None:
-            source = replace(source, import_roots=tuple(Path(path) for path in import_roots))
-    else:
-        source = SourceContext(
-            package_root=Path(package_root),
-            import_roots=tuple(Path(path) for path in (import_roots or ())),
-        )
-    if context is not None:
-        expected = SourceContext(source.package_root.resolve(), normalized_import_roots(source))
-        actual = context.index.source
-        if (
-            actual.package_root.resolve() != expected.package_root
-            or normalized_import_roots(actual) != expected.import_roots
-        ):
-            raise ValueError("Analysis context must use the requested source root and import roots")
-        return context.index, context
-    index = build_source_index(source)
-    return index, AnalysisContext.from_index(index) if index.files else None
-
-
-def _validate_depth(max_depth: int) -> None:
-    if isinstance(max_depth, bool) or not isinstance(max_depth, int) or max_depth < 1:
-        raise ValueError("max_depth must be a positive integer")
 
 
 def _empty_source_report(index: SourceIndex) -> ScanReport:

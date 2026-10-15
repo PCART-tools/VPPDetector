@@ -7,165 +7,31 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
 
-from ._scan_facts import capture_names, conditions_possible, copy_protocol_target, immediate_body
+from ._analysis_context import AnalysisContext
+from ._fact_adapter import PCResolveAdapter as PCResolveAdapter
+from ._fact_adapter import ResolutionError
+from ._program_facts import (
+    call_span,
+    candidate_identities,
+    capture_names,
+    conditions_possible,
+    copy_protocol_target,
+    direct_calls,
+    identity_from_target,
+    immediate_body,
+)
+from ._program_facts import (
+    target_status as _target_status,
+)
 from .models import (
     AnalysisBoundary,
     ForwardingFinding,
     ForwardingStep,
     FunctionIdentity,
-    SourceContext,
     SourceSpan,
     VariadicKind,
 )
-from .source import IndexedFunction, SourceIndex, build_source_index
-
-
-class ResolutionError(RuntimeError):
-    """Raised when PCResolve cannot analyze an explicit source entry."""
-
-
-class PCResolveAdapter:
-    """Narrow adapter around PCResolve's value-flow API."""
-
-    def __init__(self, index: SourceIndex) -> None:
-        try:
-            from pcresolve import FlowAnalyzer
-        except ImportError as exc:  # pragma: no cover - packaging failure
-            raise ResolutionError(
-                "PCResolve newer than 1.0.7 is required; install pcresolve>1.0.7 "
-                "with 'python -m pip install -e .' from the VPPDetector checkout"
-            ) from exc
-        self._analyzer = FlowAnalyzer(
-            source_files=index.files,
-            import_roots=index.source.import_roots,
-        )
-        self._analysis_cache = {}
-        self._expansion_cache = {}
-
-    def analyze(self, function: FunctionIdentity, max_depth: int = 1) -> Any:
-        from pcresolve import FunctionRef
-
-        cache_key = (function, max_depth)
-        cached = self._analysis_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        entry = FunctionRef(
-            module=function.module,
-            qualname=function.qualname,
-            file_path=str(function.file_path or ""),
-            lineno=function.lineno or 0,
-        )
-        try:
-            analysis = self._analyzer.analyze(entry, max_depth=max_depth)
-        except (KeyError, RuntimeError, ValueError) as exc:
-            raise ResolutionError(str(exc)) from exc
-        self._analysis_cache[cache_key] = analysis
-        return analysis
-
-    def expand(self, analysis: Any, call_id: str) -> Any:
-        """Expand one exact edge, retaining its incoming program facts."""
-
-        cache_key = (id(analysis), call_id)
-        cached = self._expansion_cache.get(cache_key)
-        if cached is not None:
-            return cached[1]
-        try:
-            expanded = self._analyzer.expand(analysis, call_id, additional_depth=1)
-        except (KeyError, RuntimeError, StopIteration, ValueError) as exc:
-            raise ResolutionError(str(exc)) from exc
-        # Retain the input too: an object id must not be reused for a different
-        # receiver snapshot while an expansion is cached.
-        self._expansion_cache[cache_key] = (analysis, expanded)
-        return expanded
-
-
-@dataclass
-class AnalysisContext:
-    """Reusable source and PCResolve state for one library source version."""
-
-    index: SourceIndex
-    adapter: PCResolveAdapter
-    _scan_cache: dict = field(default_factory=dict, init=False, repr=False)
-    _transform_spans: dict = field(default_factory=dict, init=False, repr=False)
-    _return_transform_spans: dict = field(default_factory=dict, init=False, repr=False)
-    _constant_tests: dict = field(default_factory=dict, init=False, repr=False)
-
-    @classmethod
-    def from_source(cls, source: SourceContext) -> "AnalysisContext":
-        return cls.from_index(build_source_index(source))
-
-    @classmethod
-    def for_api(cls, source: SourceContext, target_api: FunctionIdentity) -> "AnalysisContext":
-        """Prepare a located API and its explicit package-local import closure.
-
-        Without a file hint, retain full-source preparation. Reuse this context
-        only for APIs whose implementations/dependencies are in its fixed file
-        set and only while the source snapshot remains unchanged.
-        """
-
-        return cls.from_index(build_source_index(source, target_api=target_api))
-
-    @classmethod
-    def from_index(cls, index: SourceIndex) -> "AnalysisContext":
-        return cls(index=index, adapter=PCResolveAdapter(index))
-
-    def resolve_api(self, identity: FunctionIdentity) -> Optional[IndexedFunction]:
-        entry = self.index.find(identity) or self.index.resolve_imported(identity)
-        if entry is not None:
-            return entry
-        if identity.file_path or identity.lineno:
-            return None
-        # Resolve the public class prefix before asking PCResolve for an
-        # inherited implementation. Never fall back to a terminal name match.
-        method = self.index.resolve_method_identity(identity)
-        analysis = self.adapter.analyze(method or identity)
-        return self.index.find(identity_from_target(analysis.entry))
-
-
-def identity_from_target(target: Any) -> FunctionIdentity:
-    def value(name: str, default: Any) -> Any:
-        if isinstance(target, dict):
-            return target.get(name, default)
-        return getattr(target, name, default)
-
-    path = value("file_path", "")
-    return FunctionIdentity(
-        module=value("module", ""),
-        qualname=value("qualname", ""),
-        file_path=Path(path) if path else None,
-        lineno=value("lineno", 0) or None,
-    )
-
-
-def candidate_identities(call: Any) -> tuple[FunctionIdentity, ...]:
-    result = []
-    for candidate in getattr(call, "target_candidates", ()):
-        identity = identity_from_target(candidate)
-        if identity not in result:
-            result.append(identity)
-    return tuple(result)
-
-
-def direct_calls(analysis: Any, caller: FunctionIdentity) -> Iterable[Any]:
-    for call in analysis.calls:
-        owner = identity_from_target(call.caller)
-        if (
-            owner.module == caller.module
-            and owner.qualname == caller.qualname
-            and (not caller.lineno or owner.lineno == caller.lineno)
-            and (not caller.file_path or owner.file_path == caller.file_path)
-        ):
-            yield call
-
-
-def call_span(call: Any) -> SourceSpan:
-    return SourceSpan(
-        file_path=Path(call.caller.file_path or ""),
-        lineno=call.lineno,
-        col_offset=call.col_offset,
-        end_lineno=call.end_lineno or call.lineno,
-        end_col_offset=call.end_col_offset or call.col_offset,
-    )
+from .source import IndexedFunction
 
 
 def _expansion_kind(argument: dict) -> Optional[VariadicKind]:
@@ -226,7 +92,7 @@ def scan_function(
             analysis = state.analysis or context.adapter.analyze(identity)
         except ResolutionError as exc:
             boundaries.append(_root_boundary(
-                AnalysisBoundary("flow_analysis_failed", str(exc), identity), entry, state
+                AnalysisBoundary(exc.code, str(exc), identity), entry, state
             ))
             continue
         state_key = (
@@ -1388,19 +1254,6 @@ def _carrier_operation_boundary(
         ):
             return call_span(call)
     return None
-
-
-def _target_status(analysis: Any, call: Any) -> str:
-    if call.target_status != "resolved":
-        return call.target_status
-    if any(
-        boundary.get("call_id") == call.id
-        and boundary.get("reason", "").startswith("dynamic_")
-        and boundary.get("reason") != "dynamic_argument_expansion"
-        for boundary in analysis.boundaries
-    ):
-        return "source_candidate"
-    return "resolved"
 
 
 def _callee_body_boundaries(analysis: Any, call: Any) -> tuple[AnalysisBoundary, ...]:

@@ -172,6 +172,17 @@ for definitions and dependencies already in its fixed file set and while the
 source snapshot is unchanged. An entry outside that set needs a new context
 or a full-source context. Whole-package scanning requires a full-source context.
 
+Reusing a context checks the selected files' content hashes before consulting
+cached results. An edited or deleted selected file raises `ValueError`; a
+full-source context also detects added source files. Create a new context after
+changing the source. An API-scoped context promises freshness for its selected
+file set; changes elsewhere require preparing another context when they matter
+to the requested scope.
+
+Cached PCResolve facts are read-only. A missing required fact contract produces
+`pcresolve_fact_contract_unavailable` boundaries and an unresolved assessment,
+as described in the [fact consumption contract](fact-contract.md).
+
 ## Parameter-level assessment
 
 `assess_change(source, target_api, change, call, *, import_roots=None, max_depth=5, context=None)`

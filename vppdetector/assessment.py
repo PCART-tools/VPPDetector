@@ -20,15 +20,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
-from ._scan_facts import capture_names, conditions_possible, copy_protocol_target, immediate_body
-from .core import (
+from ._analysis_context import (
     AnalysisContext,
-    ResolutionError,
-    _target_status,
+    PathLike,
+    ScanSource,
+)
+from ._analysis_context import (
+    prepare_context as _prepare_context,
+)
+from ._analysis_context import (
+    validate_depth as _validate_depth,
+)
+from ._fact_adapter import ResolutionError
+from ._program_facts import (
+    CallFacts,
     call_span,
     candidate_identities,
+    capture_names,
+    conditions_possible,
+    copy_protocol_target,
     direct_calls,
     identity_from_target,
+    immediate_body,
+)
+from ._program_facts import (
+    target_status as _target_status,
 )
 from .models import (
     AnalysisBoundary,
@@ -41,7 +57,6 @@ from .models import (
     ParameterState,
     SourceSpan,
 )
-from .scanner import PathLike, ScanSource, _prepare_context, _validate_depth
 from .source import IndexedFunction
 
 _UNKNOWN = object()
@@ -401,7 +416,7 @@ class _Proof:
         try:
             analysis = analysis or self.context.adapter.analyze(function.identity)
         except ResolutionError as exc:
-            self.unknown(function, "flow_analysis_failed", str(exc))
+            self.unknown(function, exc.code, str(exc))
         if function.node.decorator_list and not self.decoration_preserved(function, analysis):
             self.unknown(function, "decorated_entry", "Entry/body decoration is not proven.")
         frame = _Frame(
@@ -1235,8 +1250,7 @@ class _Frame:
             or target.node is not local.node
             or _target_status(self.analysis, call) != "resolved"
             or call.analysis_status != "analyzed"
-            or call.binding_status != "complete"
-            or call.binding_issues
+            or not CallFacts(self.analysis, call).complete_binding
             or any(candidate != target.identity for candidate in candidate_identities(call))
             or any(
                 incoming.get("capture_bindings") != call.capture_bindings
