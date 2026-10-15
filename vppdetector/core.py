@@ -202,7 +202,7 @@ def scan_function(
             constructor_fact = source_constructor_binding(analysis, call)
             if ((getattr(call, "constructor_bindings", ())
                     or call.target_status == "constructor" and selected is not None
-                    and selected.qualname.endswith(".__new__"))
+                    and selected.qualname.endswith((".__new__", ".__init__")))
                     and constructor_fact is None):
                 targets = ()
             if not targets:
@@ -303,7 +303,7 @@ def scan_function(
                             and constructor_fact["body_execution"] != "synchronous"):
                         boundaries.append(AnalysisBoundary(
                             "deferred_callee_body_not_followed",
-                            "The bound allocator body executes in a deferred phase.",
+                            "The bound constructor body executes in a deferred phase.",
                             identity, span,
                         ))
                         continue
@@ -539,7 +539,11 @@ def _expand_body(
         incoming_class = any(value.get("source_class_origin") and value.get("class_type")
                              for argument in call.argument_sources
                              for value in argument.get("sources", ()))
+        incoming_instance = any(value.get("instance_type")
+                                for argument in call.argument_sources
+                                for value in argument.get("sources", ()))
         if (not required and not incoming_callable and not incoming_literal and not incoming_class
+                and not incoming_instance
                 and not getattr(call, "capture_bindings", ())):
             # Instance-method source candidates and ordinary helpers retain
             # the existing nominal body analysis. Never use this fallback for
@@ -567,6 +571,21 @@ def _expand_body(
             contexts = getattr(inner, "analysis_contexts", ())
             if not contexts or any(item.get("incoming_call_id") != call.id for item in contexts):
                 raise ResolutionError("Mixed incoming callable contexts cannot prove one path.")
+        constructor = source_constructor_binding(analysis, call)
+        if constructor is not None and constructor["phase"] == "__init__":
+            parameter = constructor["implicit_binding"]["parameter"]
+            positional = (*definition.signature.positional_only,
+                          *definition.signature.positional_or_keyword)
+            if not positional or positional[0] != parameter:
+                raise ResolutionError("Initializer implicit receiver binding is unavailable.")
+            for inner in direct_calls(child, definition.identity):
+                for item in inner.analysis_contexts:
+                    values = item.get("parameter_facts", {}).get(parameter, ())
+                    if not values or any(value.get("instance_type") != constructor["receiver_class"]
+                                         or value.get("value_incomplete") for value in values):
+                        raise ResolutionError(
+                            "Initializer instance context is incomplete or conflicting."
+                        )
         return child
     receivers = _receiver_contexts(child, definition.identity)
     if len(receivers) > 1:

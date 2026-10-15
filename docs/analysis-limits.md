@@ -141,6 +141,14 @@ receiver, MRO, source hashes and implicit parameter before entering the body.
 Missing entry facts, custom/deferred allocation and unknown construction remain
 resolution boundaries. Generic method queries retain their separate contexts.
 
+Ordinary builtin allocation can instead select a source `__init__` invocation.
+Scan requires its matching `constructor_instance` binding and actual incoming
+`instance_type`, including when the initializer is inherited. It expands that
+call edge and rejects missing/conflicting receiver contexts. This proves one
+invocation phase under source snapshot assumptions; initialized state and
+complete construction effects remain unmodeled. Unknown receiver effects,
+custom attribute lookup and changed source members retain lookup boundaries.
+
 When a decorated callable has a proven identity but unmodeled effects, the
 scanner does not use its body to prove container returns or further
 forwarding. A direct expansion against its nominal signature can still produce

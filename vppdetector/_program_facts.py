@@ -332,7 +332,7 @@ def source_constructor_entry_binding(analysis: Any, requested: FunctionIdentity)
 
 
 def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
-    """Read a source-only __new__ invocation proof, never initialized state."""
+    """Read one source constructor invocation proof, never initialized state."""
 
     bindings = getattr(call, "constructor_bindings", ())
     if (not isinstance(bindings, (list, tuple))
@@ -348,7 +348,14 @@ def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
             or not isinstance(binding.get("call_evidence"), dict)):
         return None
     implicit = binding["implicit_binding"]
-    slot = {"constructor_class": True}
+    phase = binding.get("phase")
+    if phase not in ("__new__", "__init__") or not all(
+            isinstance(item, str) for item in binding["assumptions"]):
+        return None
+    initializer = phase == "__init__"
+    scope = "init_invocation_only" if initializer else "new_invocation_only"
+    slot = {"constructor_instance" if initializer else "constructor_class": True}
+    receiver_kind = "instance_type" if initializer else "class_type"
     arguments = [a for a in call.argument_sources if a.get("argument") == slot
                  and a.get("parameter") == implicit.get("parameter")]
     records = [r for r in call.parameter_bindings if r.get("argument") == slot]
@@ -360,8 +367,8 @@ def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
     valid = (
         binding.get("status") == "source_bound" and binding.get("basis") == "source_snapshot"
         and not binding.get("issues") and binding.get("runtime_target_confirmed") is False
-        and binding.get("phase") == "__new__"
-        and binding.get("execution_scope") == "new_invocation_only"
+        and call.target.qualname.endswith("." + phase)
+        and binding.get("execution_scope") == scope
         and binding.get("instance_state") == "unmodeled"
         and binding.get("body_execution") in ("synchronous", "deferred")
         and binding.get("target") is not None
@@ -370,7 +377,7 @@ def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
         and implicit.get("receiver_class") == binding.get("receiver_class")
         and len(records) == len(arguments) == 1 and records[0].get("status") == "exact"
         and records[0].get("parameter") == implicit.get("parameter")
-        and bool(values) and all(v.get("class_type") == binding.get("receiver_class")
+        and bool(values) and all(v.get(receiver_kind) == binding.get("receiver_class")
             and v.get("relation") == "direct" and not any(v.get(flag) for flag in (
                 "projection", "output_path", "value_incomplete", "import_modified",
                 "import_incomplete")) for v in values)
@@ -381,9 +388,10 @@ def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
         and all(analysis.inputs.get("sha256", {}).get(path) == digest
                 for path, digest in binding["source_hashes"].items())
         and assumptions.issubset(binding.get("assumptions", ()))
-        and any(b.get("call_id") == call.id and b.get("reason") == "source_constructor_new_binding"
+        and any(b.get("call_id") == call.id
+                and b.get("reason") == "source_constructor_" + phase.strip("_") + "_binding"
                 and b.get("boundary_kind") == "assumption"
-                and b.get("execution_scope") == "new_invocation_only" for b in analysis.boundaries)
+                and b.get("execution_scope") == scope for b in analysis.boundaries)
         and all(item.get("target") == binding["target"]
                 and item.get("constructor_bindings") == bindings
                 for item in call.analysis_contexts))
