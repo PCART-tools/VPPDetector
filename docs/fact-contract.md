@@ -166,3 +166,12 @@ the scan depth budget still stop traversal. Assessment retains ordinary
 expansion behavior. Finite generated source dispatch tables arrive through the
 existing producer candidate facts; VPPDetector does not evaluate comprehensions
 or reflective namespace expressions.
+
+Assessment can consume `builtin_scalar_truth` only after validating its call,
+source hash, binding, input precondition and every incoming protocol record.
+The query must supply an exact modeled builtin scalar; an unknown object or a
+custom truth protocol remains unresolved. The converted value retains the
+selected-value marker. Merely discarding an optional-pop conversion does not
+establish consumption. Missing external decorator source is separately exposed
+as `decorator_source_unavailable`, while the primary assessment remains
+`UNKNOWN/decorated_entry`; the diagnostic does not approve the decorated body.

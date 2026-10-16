@@ -42,6 +42,7 @@ from ._program_facts import (
     direct_calls,
     identity_from_target,
     immediate_body,
+    scalar_truth_protocol,
     source_classmethod_binding,
 )
 from ._program_facts import (
@@ -424,6 +425,19 @@ class _Proof:
             self.unknown(function, "dynamic_construction",
                          "Later constructor phases are unmodeled.")
         if function.node.decorator_list and not self.decoration_preserved(function, analysis):
+            for summary in analysis.functions:
+                if identity_from_target(summary['function']) != function.identity:
+                    continue
+                for fact in summary.get('decorator_effects', ()):
+                    for boundary in fact.get('boundaries', ()):
+                        helper = boundary.get('source_target')
+                        if (boundary.get('source_available') is False and isinstance(helper, str)
+                                and boundary.get('reason') == 'decorator_call_unresolved'):
+                            self.boundaries.append(AnalysisBoundary(
+                                'decorator_source_unavailable',
+                                f'Decorator helper {helper} has no source in this snapshot.',
+                                function.identity,
+                            ))
             self.unknown(function, "decorated_entry", "Entry/body decoration is not proven.")
         frame = _Frame(
             self, function, analysis, values, ancestry + (function.identity,), dict(facts)
@@ -1013,6 +1027,15 @@ class _Frame:
         if self.related(node.func):
             self.unknown("call_target_unproven", node)
         positional, keywords = self.arguments(node)
+        truth_protocol = scalar_truth_protocol(self.analysis, facts) if facts else None
+        if truth_protocol is not None and len(positional) == 1 and not keywords:
+            value = positional[0]
+            if (isinstance(value, _Value)
+                    and type(value.literal) in (type(None), bool, int, float, str, bytes)):
+                truth = self.truth(value)
+                self.proof.note(self.function, 'builtin_scalar_truth',
+                                f'Exact scalar conversion: {truth}.', node)
+                return _Value(truth, _tracked(value), _key_presence(value))
         if facts and len(facts.result_sources) == 1:
             protocol = copy_protocol_target(
                 self.function, self.analysis, facts, facts.result_sources[0]
