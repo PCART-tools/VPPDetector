@@ -83,6 +83,11 @@ source read evidence and the declared metadata-preservation assumptions. Missing
 unconfirmed or mismatched premises cannot preserve downstream lookup. VPPDetector
 does not infer the literal from class spelling. The premise does not establish
 conditional cache-read safety, cached payload types or a configured backend.
+Producer-detected class references escaping through containers, aliases or
+deferred captures can invalidate this premise even when the final call does not
+spell the class name. Both consumers honor the resulting unconfirmed fact;
+neither reconstructs a canonical name or restores the old target. Escape
+containment facts do not establish a class identity for a container or call result.
 
 The supported development combination is recorded with an exact producer
 commit in the reproducibility manifest. The package requirement alone does
