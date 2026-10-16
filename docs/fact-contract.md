@@ -94,6 +94,16 @@ spell the class name. Both consumers honor the resulting unconfirmed fact;
 neither reconstructs a canonical name or restores the old target. Escape
 containment facts do not establish a class identity for a container or call result.
 
+Conditional class-cache reads may carry a producer
+`class_attribute_read_invariant`: the attribute is absent or holds a builtin
+literal payload under the recorded source-snapshot assumptions. The producer
+uses an unshadowed `hasattr` branch and definite writes to justify later reads.
+The reader validates `read_basis`, every `read_premises` entry and its probe
+evidence against the exact class/helper/parameter/call and snapshot hashes.
+Missing, conflicting or unconfirmed premises cannot preserve a downstream
+lookup. The consumer does not infer descriptor behavior or cache contents, and
+assessment retains its separate argument-consumption and lifecycle boundaries.
+
 The supported development combination is recorded with an exact producer
 commit in the reproducibility manifest. The package requirement alone does
 not establish support for every optional fact. A minimum supported release

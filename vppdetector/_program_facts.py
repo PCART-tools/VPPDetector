@@ -276,6 +276,63 @@ def _class_name_premise(analysis: Any, effect: dict) -> bool:
     )
 
 
+def _class_read_premises(analysis: Any, effect: dict) -> bool:
+    basis = effect.get("read_basis")
+    if basis is None:
+        return "read_premises" not in effect and "read_evidence" not in effect
+    premises, evidence = effect.get("read_premises"), effect.get("read_evidence")
+    if (basis != "source_class_attribute_invariant"
+            or not isinstance(premises, (list, tuple)) or not 1 <= len(premises) <= 2000
+            or not isinstance(evidence, (list, tuple)) or not 1 <= len(evidence) <= 2000):
+        return False
+    required = {"source_snapshot_bindings_hold", "builtin_type_attribute_reads",
+                "source_snapshot_class_attribute_invariant",
+                "no_external_monkeypatch_or_import_hook",
+                "no_unmodeled_indirect_class_mutation"}
+    attributes = set()
+    for premise in premises:
+        if not isinstance(premise, dict):
+            return False
+        name, hashes, claims = (premise.get("attribute"), premise.get("source_hashes"),
+                               premise.get("assumptions"))
+        if (premise.get("kind") != "class_attribute_read_invariant"
+                or premise.get("status") != "source_bound"
+                or premise.get("basis") != "source_snapshot"
+                or premise.get("state") != "absent_or_builtin_literal"
+                or premise.get("value_phase") != "call_entry"
+                or premise.get("runtime_value_confirmed") is not False
+                or premise.get("source_scope") != "analysis_source_snapshot"
+                or not isinstance(premise.get("issues"), (list, tuple)) or premise["issues"]
+                or not isinstance(name, str) or not name or len(name) > 2000
+                or name == "mro" or name.startswith("__") and name.endswith("__")
+                or name in attributes
+                or any(premise.get(key) != effect.get(key)
+                       for key in ("receiver_class", "target", "parameter",
+                                   "call_id", "call_evidence"))
+                or not isinstance(premise.get("call_id"), str) or not premise["call_id"]
+                or not isinstance(claims, (list, tuple))
+                or not all(isinstance(claim, str) for claim in claims)
+                or not required.issubset(claims)
+                or not isinstance(hashes, dict) or not hashes
+                or hashes != analysis.inputs.get("sha256")
+                or any(effect["source_hashes"].get(path) != digest
+                       for path, digest in hashes.items())
+                or not isinstance(premise.get("evidence"), (list, tuple)) or not premise["evidence"]
+                or any(not isinstance(source, dict) or source.get("file_path") not in hashes
+                       for source in premise["evidence"])):
+            return False
+        attributes.add(name)
+    witnessed = set()
+    for item in evidence:
+        if (not isinstance(item, dict) or item.get("operation") != "hasattr"
+                or not isinstance(item.get("attribute"), str) or item["attribute"] not in attributes
+                or not isinstance(item.get("evidence"), dict)
+                or item["evidence"].get("file_path") != effect["target"].get("file_path")):
+            return False
+        witnessed.add(item["attribute"])
+    return witnessed == attributes
+
+
 def _class_lookup_preserved(analysis: Any, call: Any, binding: dict) -> bool:
     observed = []
     for value in call.receiver_sources:
@@ -323,7 +380,7 @@ def _class_lookup_preserved(analysis: Any, call: Any, binding: dict) -> bool:
                        or analysis.inputs.get("sha256", {}).get(path) != digest
                        for path, digest in hashes.items())):
             return False
-        if not _class_name_premise(analysis, effect):
+        if not _class_name_premise(analysis, effect) or not _class_read_premises(analysis, effect):
             return False
     return True
 
