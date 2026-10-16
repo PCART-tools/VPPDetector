@@ -72,6 +72,14 @@ descriptor behavior. Existing descriptors, conditional cache initialization and
 unknown replacement values still require producer evidence. Such partial facts
 do not establish complete helper effects or selected-argument handling.
 
+Computed class-write names may carry a producer `class_name_literal` entry
+premise in `name_metadata`. The reader requires a `source_bound` canonical
+`__name__`, the exact class/helper/parameter/call, matching full snapshot hashes,
+source read evidence and the declared metadata-preservation assumptions. Missing,
+unconfirmed or mismatched premises cannot preserve downstream lookup. VPPDetector
+does not infer the literal from class spelling. The premise does not establish
+conditional cache-read safety, cached payload types or a configured backend.
+
 The supported development combination is recorded with an exact producer
 commit in the reproducibility manifest. The package requirement alone does
 not establish support for every optional fact. A minimum supported release

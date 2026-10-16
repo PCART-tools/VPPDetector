@@ -234,6 +234,48 @@ def target_status(analysis: Any, call: Any) -> str:
     return "resolved"
 
 
+def _class_name_premise(analysis: Any, effect: dict) -> bool:
+    basis = effect.get("name_basis")
+    if basis is None:
+        return "name_metadata" not in effect and "name_evidence" not in effect
+    metadata = effect.get("name_metadata")
+    if basis != "source_class_metadata" or not isinstance(metadata, dict):
+        return False
+    receiver, literal = metadata.get("receiver_class"), metadata.get("literal")
+    hashes, assumptions = metadata.get("source_hashes"), metadata.get("assumptions")
+    required = {"source_snapshot_bindings_hold", "builtin_type_name_metadata",
+                "source_snapshot_class_name_binding_holds",
+                "no_external_monkeypatch_or_import_hook",
+                "no_unmodeled_indirect_class_mutation"}
+    evidence = effect.get("name_evidence")
+    return (
+        metadata.get("kind") == "class_name_literal" and metadata.get("status") == "source_bound"
+        and metadata.get("basis") == "source_snapshot" and metadata.get("attribute") == "__name__"
+        and metadata.get("value_phase") == "call_entry"
+        and metadata.get("runtime_value_confirmed") is False
+        and metadata.get("source_scope") == "analysis_source_snapshot"
+        and isinstance(metadata.get("issues"), (list, tuple)) and not metadata["issues"]
+        and isinstance(receiver, dict) and receiver == effect.get("receiver_class")
+        and isinstance(receiver.get("qualname"), str) and bool(receiver["qualname"])
+        and isinstance(literal, dict) and literal.get("type") == "str"
+        and type(literal.get("value")) is str
+        and literal["value"] == receiver["qualname"].rsplit(".", 1)[-1]
+        and metadata.get("target") == effect.get("target")
+        and metadata.get("parameter") == effect.get("parameter")
+        and isinstance(metadata.get("call_id"), str) and bool(metadata["call_id"])
+        and metadata["call_id"] == effect.get("call_id")
+        and isinstance(assumptions, (list, tuple))
+        and all(isinstance(item, str) for item in assumptions) and required.issubset(assumptions)
+        and isinstance(hashes, dict) and bool(hashes)
+        and hashes == analysis.inputs.get("sha256")
+        and all(effect["source_hashes"].get(path) == digest for path, digest in hashes.items())
+        and isinstance(evidence, (list, tuple)) and bool(evidence)
+        and all(isinstance(item, dict)
+                and item.get("file_path") == effect["target"].get("file_path")
+                for item in evidence)
+    )
+
+
 def _class_lookup_preserved(analysis: Any, call: Any, binding: dict) -> bool:
     observed = []
     for value in call.receiver_sources:
@@ -280,6 +322,8 @@ def _class_lookup_preserved(analysis: Any, call: Any, binding: dict) -> bool:
                 or any(binding["source_hashes"].get(path) != digest
                        or analysis.inputs.get("sha256", {}).get(path) != digest
                        for path, digest in hashes.items())):
+            return False
+        if not _class_name_premise(analysis, effect):
             return False
     return True
 
