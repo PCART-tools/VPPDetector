@@ -64,6 +64,10 @@ selected phase/target, implicit parameter, hashes and assumption boundary. Class
 queries retain distinct producer and scan cache entries from generic method
 queries, even when they share an implementation. Missing or conflicting entry
 facts stop resolution. Assessment preserves the allocator lifecycle boundary.
+The producer also checks source-MRO class-definition evaluation before binding
+an allocator or initializer. Unknown definition effects may replace that phase;
+an unconfirmed proof stops scan and assessment from using the old body. The
+consumer does not evaluate those class definitions or infer an alternative phase.
 
 Finite class-write sets may include producer-proven local string concatenations
 and subsequent reads of builtin literal payloads definitely written by that same
