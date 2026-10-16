@@ -45,6 +45,7 @@ class IndexedFunction:
     is_overload: bool
     is_bound_method: bool = False
     query_class: Optional[FunctionIdentity] = None
+    query_alias: Optional[FunctionIdentity] = None
 
     @property
     def variadic_parameters(self) -> Tuple[Tuple[str, VariadicKind], ...]:

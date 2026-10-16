@@ -175,3 +175,15 @@ selected-value marker. Merely discarding an optional-pop conversion does not
 establish consumption. Missing external decorator source is separately exposed
 as `decorator_source_unavailable`, while the primary assessment remains
 `UNKNOWN/decorated_entry`; the diagnostic does not approve the decorated body.
+
+## Source API alias selection
+
+PCResolve can supply `inputs.entry_alias` for a captured plain source function.
+The common API resolver checks its requested identity, original function,
+assignment chain and spans, fixed source hashes, assumptions and conditional
+definition boundaries. The alias query has its own cache identity and retains
+the user's API name; implementation steps name the original source definition.
+Deleting the original namespace name does not delete an earlier captured alias.
+This selects a source body and does not confirm runtime attribute binding or
+activate a conditional fallback. Missing/conflicting alias evidence, visible
+replacement and definitions absent from the selected version remain unavailable.

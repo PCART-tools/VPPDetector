@@ -84,7 +84,7 @@ def scan_function(
     compatibility decision or a claim of guaranteed runtime failure.
     """
 
-    cache_key = (entry.identity, max_depth, entry.query_class)
+    cache_key = (entry.identity, max_depth, entry.query_class, entry.query_alias)
     if cache_key in context._scan_cache:
         return context._scan_cache[cache_key]
     pending = [_State(entry, name, name, kind) for name, kind in entry.variadic_parameters]
@@ -97,7 +97,7 @@ def scan_function(
         identity = state.function.identity
         try:
             analysis = state.analysis or context.adapter.analyze(
-                state.function.query_class or identity)
+                state.function.query_class or state.function.query_alias or identity)
             if (state.analysis is None and state.function.query_class is not None
                     and any(boundary.get('reason') == 'source_lookup_candidate'
                             for boundary in analysis.boundaries)):
@@ -596,7 +596,8 @@ def _expand_body(
         try:
             child = context.adapter.expand(analysis, call.id, isolate=True)
         except (ResolutionError, TypeError) as exc:
-            raise ResolutionError('Mixed incoming callable contexts cannot prove one path.') from exc
+            raise ResolutionError(
+                'Mixed incoming callable contexts cannot prove one path.') from exc
     summaries = [
         summary
         for summary in child.functions

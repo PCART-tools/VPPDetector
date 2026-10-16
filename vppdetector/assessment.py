@@ -417,7 +417,7 @@ class _Proof:
             )
         try:
             analysis = analysis or self.context.adapter.analyze(
-                function.query_class or function.identity)
+                function.query_class or function.query_alias or function.identity)
         except ResolutionError as exc:
             self.unknown(function, exc.code, str(exc))
         if (function.query_class is not None

@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Optional, Sequence, Union
 
 from ._fact_adapter import PCResolveAdapter, ResolutionError
-from ._program_facts import identity_from_target, source_constructor_entry_binding
+from ._program_facts import (
+    identity_from_target,
+    source_alias_entry,
+    source_constructor_entry_binding,
+)
 from .models import FunctionIdentity, SourceContext
 from .source import IndexedFunction, SourceIndex, build_source_index, normalized_import_roots
 
@@ -65,12 +69,27 @@ class AnalysisContext:
         if entry is not None:
             return entry
         if identity.file_path or identity.lineno:
-            return None
+            try:
+                analysis = self.adapter.analyze(identity)
+            except ResolutionError:
+                return None
+            entry = self.index.find(identity_from_target(analysis.entry))
+            return (replace(entry, query_alias=identity)
+                    if entry and source_alias_entry(analysis, identity) else None)
         # Resolve the public class prefix before asking PCResolve for an
         # inherited implementation. Never fall back to a terminal name match.
         method = self.index.resolve_method_identity(identity)
         analysis = self.adapter.analyze(method or identity)
-        return self.index.find(identity_from_target(analysis.entry))
+        entry = self.index.find(identity_from_target(analysis.entry))
+        if ('entry_alias' in analysis.inputs
+                or any(boundary.get('reason') == 'source_entry_alias'
+                       for boundary in analysis.boundaries)
+                or entry and entry.identity.qualname.rsplit('.', 1)[-1]
+                    != (method or identity).qualname.rsplit('.', 1)[-1]):
+            if entry is None or source_alias_entry(analysis, method or identity) is None:
+                raise ResolutionError('Source API alias evidence is unavailable or conflicting.')
+            return replace(entry, query_alias=method or identity)
+        return entry
 
 
 def prepare_context(

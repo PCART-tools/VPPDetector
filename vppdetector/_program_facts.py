@@ -63,6 +63,69 @@ def scalar_truth_protocol(analysis, call):
     return fact
 
 
+def source_alias_entry(analysis, requested):
+    """Read a lexical API reference without claiming runtime attribute binding."""
+    fact = analysis.inputs.get('entry_alias', {})
+    if not isinstance(fact, dict):
+        return None
+    query = fact.get('requested', {})
+    if not isinstance(query, dict):
+        return None
+    alias_target = fact.get('target')
+    if (not isinstance(alias_target, dict)
+            or not all(isinstance(alias_target.get(name), str)
+                       for name in ('module', 'qualname', 'file_path'))
+            or type(alias_target.get('lineno')) is not int
+            or not isinstance(query.get('file_path', ''), str)):
+        return None
+    assignments = fact.get('assignments', ())
+    target = identity_from_target(analysis.entry)
+    if (fact.get('kind') != 'source_entry_alias' or fact.get('status') != 'source_reference'
+            or fact.get('basis') != 'source_snapshot'
+            or fact.get('scope') != 'definition_selection'
+            or fact.get('runtime_target_confirmed') is not False
+            or query.get('module') != requested.module
+            or query.get('qualname') != requested.qualname
+            or query.get('lineno', 0) != (requested.lineno or 0)
+            or requested.file_path and Path(query.get('file_path', '')) != requested.file_path
+            or identity_from_target(fact.get('target')) != target
+            or fact.get('source_hashes') != analysis.inputs.get('sha256')
+            or fact.get('assumptions') != ['source_snapshot_bindings_hold',
+                'no_external_monkeypatch_or_import_hook', 'no_unmodeled_indirect_function_mutation']
+            or not isinstance(fact.get('conditions'), (list, tuple))
+            or len(fact['conditions']) > 128
+            or any(not isinstance(condition, dict) for condition in fact['conditions'])
+            or not isinstance(assignments, (list, tuple))
+            or not 1 <= len(assignments) <= 64):
+        return None
+    previous = target.qualname.rsplit('.', 1)[-1]
+    for assignment in assignments:
+        if not isinstance(assignment, dict) or assignment.get('source_name') != previous:
+            return None
+        evidence = assignment.get('evidence', {})
+        if (not isinstance(evidence, dict)
+                or evidence.get('file_path') not in fact['source_hashes']
+                or Path(evidence['file_path']) != target.file_path
+                or not isinstance(assignment.get('name'), str)
+                or not all(type(value) is int for value in _location(evidence))):
+            return None
+        previous = assignment['name']
+    if previous != requested.qualname.rsplit('.', 1)[-1]:
+        return None
+    activation = [boundary.get('conditions', ()) for boundary in analysis.boundaries
+                  if boundary.get('reason') == 'conditional_definition_unconfirmed'
+                  and identity_from_target(boundary.get('function')) == target]
+    if (fact['conditions'] and fact['conditions'] not in activation
+            or any(conditions != fact['conditions'] for conditions in activation)):
+        return None
+    if not any(boundary.get('reason') == 'source_entry_alias'
+               and identity_from_target(boundary.get('function')) == target
+               and boundary.get('assumptions') == fact['assumptions']
+               for boundary in analysis.boundaries):
+        return None
+    return fact
+
+
 def _location(value):
     return tuple(value.get(name) for name in (
         'lineno', 'col_offset', 'end_lineno', 'end_col_offset',
