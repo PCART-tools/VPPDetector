@@ -130,18 +130,26 @@ class PCResolveAdapter:
             raise ResolutionError("PCResolve fact contract unavailable: source snapshot mismatch",
                                   "pcresolve_fact_contract_unavailable")
 
-    def analyze(self, function, max_depth=1):
+    def analyze(self, function, max_depth=1, *, conditional_source_state=False):
         from pcresolve import FunctionRef
 
-        key = function, max_depth
+        key = ((function, max_depth, 'conditional_source_state')
+               if conditional_source_state else (function, max_depth))
         if key not in self._analysis_cache:
             entry = FunctionRef(module=function.module, qualname=function.qualname,
                                 file_path=str(function.file_path or ""),
                                 lineno=function.lineno or 0)
             try:
-                result = self._analyzer.analyze(entry, max_depth=max_depth)
-            except (KeyError, RuntimeError, ValueError) as exc:
+                if conditional_source_state:
+                    result = self._analyzer.analyze(entry, max_depth=max_depth,
+                                                    conditional_source_state=True)
+                else:
+                    result = self._analyzer.analyze(entry, max_depth=max_depth)
+            except (KeyError, RuntimeError, ValueError, TypeError) as exc:
                 raise ResolutionError(str(exc)) from exc
+            if (conditional_source_state
+                    and result.inputs.get('conditional_source_state') is not True):
+                raise ResolutionError('PCResolve conditional source-state facts are unavailable')
             self._validate(result)
             self._analysis_cache[key] = readonly(result)
         self._analysis_cache[key] = readonly(self._analysis_cache[key])

@@ -135,3 +135,21 @@ outside that set require rebuilding the context when the scope changes. These
 checks add file-reading cost to warm queries; they do not reparse the AST or
 rerun the producer. Concurrent edits during a query are outside the fixed
 snapshot contract.
+
+## Conditional source-state queries
+
+`inputs.conditional_source_state=true` marks a producer query under explicit
+source-lookup requirements. It is separate from ordinary facts, with separate
+adapter and expansion cache entries. Scan requests it only for a bound class
+entry with a producer `source_lookup_candidate` boundary. The reader validates
+`conditional_source_bindings` against the target, receiver classes, exact call
+span, source hashes, required predicates and incoming contexts. Missing or
+conflicting records stop the path. Allocated `candidate_paths` retain their own
+conditions; opposite outcomes of the same source test cannot form one finding.
+`ForwardingStep.conditions` and `ForwardingFinding.conditions` expose these
+requirements. Empty conditions preserve ordinary structural behavior.
+
+These records establish a conditional source path, not effect completeness,
+feasibility or runtime dispatch. Unknown class/call effects remain boundaries.
+The ordinary classmethod and constructor proof readers reject this query mode;
+assessment never obtains these facts from the scan cache.

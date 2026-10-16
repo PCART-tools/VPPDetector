@@ -222,6 +222,8 @@ def call_span(call: Any) -> SourceSpan:
 
 
 def target_status(analysis: Any, call: Any) -> str:
+    if getattr(call, 'conditional_source_bindings', ()):
+        return 'conditional_source_candidate'
     if call.target_status != "resolved":
         return call.target_status
     if any(
@@ -388,6 +390,9 @@ def _class_lookup_preserved(analysis: Any, call: Any, binding: dict) -> bool:
 def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
     """Read a source binding proof tied to this call and every incoming context."""
 
+    if (analysis.inputs.get('conditional_source_state')
+            or getattr(call, 'conditional_source_bindings', ())):
+        return None
     bindings = getattr(call, "class_method_bindings", ())
     if (not isinstance(bindings, (list, tuple)) or call.target_status != "classmethod"
             or call.target is None or len(bindings) != 1):
@@ -425,6 +430,103 @@ def source_classmethod_binding(analysis: Any, call: Any) -> Optional[dict]:
                 and incoming.get("class_method_bindings") == bindings
                 for incoming in getattr(call, "analysis_contexts", ())))
     return binding if valid else None
+
+
+def conditional_source_binding(analysis: Any, call: Any) -> Optional[dict]:
+    """Read an explicit lookup requirement without promoting it to a binding proof."""
+    facts = getattr(call, 'conditional_source_bindings', ())
+    if (analysis.inputs.get('conditional_source_state') is not True
+            or call.target is None or call.analysis_status != 'analyzed'
+            or not isinstance(facts, (list, tuple)) or len(facts) != 1
+            or call.target_status not in ('super_new', 'super_method', 'classmethod')):
+        return None
+    fact = facts[0]
+    expected = []
+    for value in call.receiver_sources:
+        identity = value.get('class_type')
+        if identity and identity not in expected:
+            expected.append(identity)
+    if (not isinstance(fact, dict) or fact.get('kind') != 'conditional_source_lookup'
+            or fact.get('status') != 'required' or fact.get('runtime_target_confirmed') is not False
+            or fact.get('feasibility') != 'not_proven' or fact.get('call_id') != call.id
+            or identity_from_target(fact.get('target')) != identity_from_target(call.target)
+            or fact.get('source_hashes') != analysis.inputs.get('sha256')
+            or not isinstance(fact.get('call_evidence'), dict)
+            or _location(fact['call_evidence']) != (call.lineno, call.col_offset,
+                                                   call.end_lineno, call.end_col_offset)
+            or fact['call_evidence'].get('file_path') != call.caller.file_path
+            or fact.get('conditions') != getattr(call, 'conditions', ())
+            or fact.get('receiver_classes') != expected or not expected):
+        return None
+    conditions = fact.get('conditions', ())
+    if (not isinstance(conditions, (list, tuple)) or not 1 <= len(conditions) <= 128
+            or any(not isinstance(condition, dict) for condition in conditions)
+            or any(incoming.get('conditional_source_bindings') != facts
+                   for incoming in getattr(call, 'analysis_contexts', ()))):
+        return None
+    required = [condition for condition in conditions
+                if condition.get('kind') == 'source_state_preserved']
+    if not required:
+        return None
+    for condition in required:
+        evidence = condition.get('evidence')
+        if (condition.get('status') != 'required' or condition.get('runtime_confirmed') is not False
+                or condition.get('scope') != 'subsequent_source_lookup'
+                or condition.get('feasibility') != 'not_proven'
+                or condition.get('receiver_class') not in fact['receiver_classes']
+                or not isinstance(condition.get('effect_target'), dict)
+                or condition['effect_target'].get('file_path') not in fact['source_hashes']
+                or not isinstance(evidence, dict)
+                or evidence.get('file_path') not in fact['source_hashes']
+                or not all(type(value) is int for value in _location(evidence))
+                or condition.get('effect_call') != '{}:{}:{}:{}:{}'.format(
+                    evidence['file_path'], *_location(evidence))):
+            return None
+    return fact
+
+
+def consistent_conditions(conditions) -> bool:
+    """Reject opposite outcomes of the same recorded source test."""
+    seen = {}
+    for condition in conditions:
+        if not isinstance(condition, dict):
+            return False
+        test, branch = condition.get('test'), condition.get('branch')
+        if not isinstance(test, dict) or type(branch) is not bool:
+            continue
+        key = test.get('file_path'), _location(test), test.get('source_text')
+        if key in seen and seen[key] != branch:
+            return False
+        seen[key] = branch
+    return True
+
+
+def conditional_path_conditions(analysis, call, target, flow):
+    """Keep one candidate's predicates separate from other receiver alternatives."""
+    if analysis.inputs.get('conditional_source_state') is not True:
+        return ()
+    conditions = list(getattr(call, 'conditions', ())) + list(flow.get('conditions', ()))
+    paths = getattr(call, 'candidate_paths', ())
+    if not isinstance(paths, (list, tuple)) or len(paths) > 128:
+        return None
+    if (any(value.get('instance_candidate_contexts') for value in call.receiver_sources)
+            and not paths):
+        return None
+    if paths:
+        if any(not isinstance(path, dict) or not isinstance(path.get('conditions'), (list, tuple))
+               or len(path['conditions']) > 128 for path in paths):
+            return None
+        compatible = [path for path in paths if path.get('call_id') == call.id
+                      and identity_from_target(path.get('target')) == target
+                      and consistent_conditions(conditions + list(path.get('conditions', ())))]
+        if not compatible:
+            return None
+        conditions += list(compatible[0].get('conditions', ()))
+    result = []
+    for condition in conditions:
+        if condition not in result:
+            result.append(condition)
+    return tuple(result) if consistent_conditions(result) else None
 
 
 def source_constructor_entry_binding(analysis: Any, requested: FunctionIdentity) -> Optional[dict]:
@@ -486,6 +588,8 @@ def source_constructor_entry_binding(analysis: Any, requested: FunctionIdentity)
 def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
     """Read one source constructor invocation proof, never initialized state."""
 
+    if analysis.inputs.get('conditional_source_state'):
+        return None
     bindings = getattr(call, "constructor_bindings", ())
     if (not isinstance(bindings, (list, tuple))
             or call.target_status != "constructor" or call.target is None

@@ -41,6 +41,26 @@ of every call to that API. A fixed downstream signature may accept a particular
 argument name, or the library may consume it before forwarding the remainder.
 Use parameter-level assessment to examine that argument under a supplied call.
 
+A public source-class scan can requery PCResolve for a conditional source-state
+path when the producer reports `source_lookup_candidate`. Each affected path
+step and finding exposes `conditions`: source branch outcomes and required
+`source_state_preserved` predicates tied to the original unknown effect.
+`conditional_source_candidate` identifies a lookup that depends on that state.
+Ordinary paths are retained alongside the additional conditional query.
+A requirement is not proof that the effect is harmless or the path is feasible.
+The finding describes forwarding if all recorded conditions and normal
+continuations hold. Unknown effects/configuration keep coverage `limited`.
+Known method/MRO replacement, receiver rebinding, inactive branches and budget
+limits do not acquire confirmed lookup from this mode.
+
+For Tornado 3.0, the public `AsyncHTTPClient` source entry can expose a path via
+`Configurable.__new__` to `SimpleAsyncHTTPClient.initialize`. It retains the
+non-reuse branch, `cls is base`, the default-configuration branch and required
+class lookup preservation across the intervening source calls. This does not
+select the actual backend, prove cache contents or guarantee that an invocation
+reaches initialization. Assessment uses ordinary facts in a separate cache and
+retains its independent handling/lifecycle limitations.
+
 ## Scan coverage
 
 Supported analysis includes:

@@ -14,7 +14,10 @@ from ._program_facts import (
     call_span,
     candidate_identities,
     capture_names,
+    conditional_path_conditions,
+    conditional_source_binding,
     conditions_possible,
+    consistent_conditions,
     copy_protocol_target,
     direct_calls,
     identity_from_target,
@@ -68,6 +71,7 @@ class _State:
     ancestry: tuple = ()
     analysis: Any = field(default=None, compare=False, repr=False)
     capture: bool = False
+    conditional: bool = False
 
 
 def scan_function(
@@ -94,13 +98,21 @@ def scan_function(
         try:
             analysis = state.analysis or context.adapter.analyze(
                 state.function.query_class or identity)
+            if (state.analysis is None and state.function.query_class is not None
+                    and any(boundary.get('reason') == 'source_lookup_candidate'
+                            for boundary in analysis.boundaries)):
+                conditioned = context.adapter.analyze(state.function.query_class,
+                                                      conditional_source_state=True)
+                conditional_state = replace(state, analysis=conditioned, conditional=True)
+                if conditional_state not in pending:
+                    pending.append(conditional_state)
         except ResolutionError as exc:
             boundaries.append(_root_boundary(
                 AnalysisBoundary(exc.code, str(exc), identity), entry, state
             ))
             continue
         state_key = (
-            identity, state.parameter, state.kind, state.capture,
+            identity, state.parameter, state.kind, state.capture, state.conditional,
             _receiver_contexts(analysis, identity),
         )
         if state_key in state.ancestry:
@@ -198,8 +210,12 @@ def scan_function(
                     or value.get("class_type") and value.get("class_lookup_mutations")
                     for value in call.receiver_sources)
                     or any("lookup_preservation" in fact
-                           for fact in getattr(call, "class_method_bindings", ()))):
-                if source_classmethod_binding(analysis, call) is None:
+                           for fact in getattr(call, "class_method_bindings", ()))
+                    or getattr(call, 'conditional_source_bindings', ())
+                    or analysis.inputs.get('conditional_source_state') is True
+                    and call.target_status in ('super_new', 'super_method', 'classmethod')):
+                if (source_classmethod_binding(analysis, call) is None
+                        and conditional_source_binding(analysis, call) is None):
                     targets = ()
             constructor_fact = source_constructor_binding(analysis, call)
             if ((getattr(call, "constructor_bindings", ())
@@ -239,7 +255,19 @@ def scan_function(
                     status,
                 )
                 for flow in carried:
+                    conditions = conditional_path_conditions(
+                        analysis, call, definition.identity, flow)
+                    if conditions is None:
+                        continue
+                    step = replace(step, conditions=conditions)
                     path = (*state.path, *flow.get("return_steps", ()), step)
+                    path_conditions = []
+                    for hop in path:
+                        for condition in hop.conditions:
+                            if condition not in path_conditions:
+                                path_conditions.append(condition)
+                    if not consistent_conditions(path_conditions):
+                        continue
                     if len(path) > max_depth:
                         boundaries.append(
                             AnalysisBoundary(
@@ -277,6 +305,7 @@ def scan_function(
                                 receiver_type_evidence=tuple(
                                     getattr(call, "receiver_type_evidence", ())
                                 ),
+                                conditions=tuple(path_conditions),
                             )
                             if finding not in findings:
                                 findings.append(finding)
@@ -341,6 +370,7 @@ def scan_function(
                         (*state.ancestry, state_key),
                         child,
                         captured,
+                        state.conditional,
                     )
                     if next_state not in pending:
                         pending.append(next_state)

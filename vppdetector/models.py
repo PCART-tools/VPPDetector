@@ -185,6 +185,7 @@ class ForwardingStep:
     callsite: SourceSpan
     target: FunctionIdentity
     target_status: str = "resolved"
+    conditions: Tuple[dict, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -202,6 +203,7 @@ class ForwardingFinding:
     target_status: str = "resolved"
     target_candidates: Tuple[FunctionIdentity, ...] = field(default_factory=tuple)
     receiver_type_evidence: Tuple[dict, ...] = field(default_factory=tuple)
+    conditions: Tuple[dict, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
