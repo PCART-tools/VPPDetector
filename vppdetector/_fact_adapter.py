@@ -147,10 +147,10 @@ class PCResolveAdapter:
                     result = self._analyzer.analyze(entry, max_depth=max_depth)
             except (KeyError, RuntimeError, ValueError, TypeError) as exc:
                 raise ResolutionError(str(exc)) from exc
+            self._validate(result)
             if (conditional_source_state
                     and result.inputs.get('conditional_source_state') is not True):
                 raise ResolutionError('PCResolve conditional source-state facts are unavailable')
-            self._validate(result)
             self._analysis_cache[key] = readonly(result)
         self._analysis_cache[key] = readonly(self._analysis_cache[key])
         return self._analysis_cache[key]
@@ -167,15 +167,15 @@ class PCResolveAdapter:
                     result = self._analyzer.expand(analysis, call_id, additional_depth=1)
             except (KeyError, RuntimeError, StopIteration, ValueError, TypeError) as exc:
                 raise ResolutionError(str(exc)) from exc
+            self._validate(result)
             if isolate:
                 edge = next(call for call in analysis.calls if call.id == call_id)
                 marker = result.inputs.get('expansion_context', {})
-                if (marker.get('incoming_call_id') != call_id
+                if (not isinstance(marker, dict) or marker.get('incoming_call_id') != call_id
                         or marker.get('caller') != asdict(edge.caller)
                         or edge.target is None or marker.get('target') != asdict(edge.target)
                         or result.entry != edge.target
                         or not isinstance(marker.get('parameter_facts'), dict)):
                     raise ResolutionError('PCResolve isolated incoming context is unavailable')
-            self._validate(result)
             self._expansion_cache[key] = analysis, readonly(result)
         return self._expansion_cache[key][1]

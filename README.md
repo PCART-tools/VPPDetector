@@ -21,7 +21,7 @@ variadic channel; `no_known_boundary` does not certify complete coverage.
 ## Requirements
 
 - Python 3.9 or newer
-- PCResolve newer than 1.0.7 (`pcresolve>1.0.7`)
+- PCResolve 1.0.8 or newer (`pcresolve>=1.0.8`)
 
 From this checkout, install the package in editable mode:
 

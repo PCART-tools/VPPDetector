@@ -98,19 +98,26 @@ def scan_function(
         try:
             analysis = state.analysis or context.adapter.analyze(
                 state.function.query_class or state.function.query_alias or identity)
-            if (state.analysis is None and state.function.query_class is not None
-                    and any(boundary.get('reason') == 'source_lookup_candidate'
-                            for boundary in analysis.boundaries)):
-                conditioned = context.adapter.analyze(state.function.query_class,
-                                                      conditional_source_state=True)
-                conditional_state = replace(state, analysis=conditioned, conditional=True)
-                if conditional_state not in pending:
-                    pending.append(conditional_state)
         except ResolutionError as exc:
             boundaries.append(_root_boundary(
                 AnalysisBoundary(exc.code, str(exc), identity), entry, state
             ))
             continue
+        if (state.analysis is None and state.function.query_class is not None
+                and any(boundary.get('reason') == 'source_lookup_candidate'
+                        for boundary in analysis.boundaries)):
+            try:
+                conditioned = context.adapter.analyze(state.function.query_class,
+                                                      conditional_source_state=True)
+            except ResolutionError as exc:
+                boundaries.append(_root_boundary(AnalysisBoundary(
+                    "conditional_source_query_unavailable",
+                    "Conditional source query unavailable: " + str(exc), identity,
+                ), entry, state))
+            else:
+                conditional_state = replace(state, analysis=conditioned, conditional=True)
+                if conditional_state not in pending:
+                    pending.append(conditional_state)
         state_key = (
             identity, state.parameter, state.kind, state.capture, state.conditional,
             _receiver_contexts(analysis, identity),

@@ -104,10 +104,16 @@ Missing, conflicting or unconfirmed premises cannot preserve a downstream
 lookup. The consumer does not infer descriptor behavior or cache contents, and
 assessment retains its separate argument-consumption and lifecycle boundaries.
 
-The supported development combination is recorded with an exact producer
-commit in the reproducibility manifest. The package requirement alone does
-not establish support for every optional fact. A minimum supported release
-requires a separate compatibility check.
+VPPDetector 1.1.0 requires PCResolve 1.0.8 or newer. Local release checks must
+exercise both packaged producer/consumer code and current development source.
+The version requirement alone does not establish support for every optional
+fact: structural admission, exact source evidence and per-operation capability
+checks still apply. Experimental `flow-0.2` remains separate from stable
+ownership schema `1.0`.
+
+Build release wheels from a fresh checkout or source export, then compare the
+packaged module set and content with that source. A reused `build/lib` directory
+can otherwise retain modules removed from the current source tree.
 
 ## Snapshot and query isolation
 
@@ -153,6 +159,11 @@ These records establish a conditional source path, not effect completeness,
 feasibility or runtime dispatch. Unknown class/call effects remain boundaries.
 The ordinary classmethod and constructor proof readers reject this query mode;
 assessment never obtains these facts from the scan cache.
+
+If this optional query is unsupported or its records fail validation, scan
+retains `conditional_source_query_unavailable` and still visits valid ordinary
+facts. Failure of the additional query cannot discard an already established
+ordinary forwarding path or supply a conditional one. Coverage remains limited.
 
 ## Isolated incoming call contexts
 
