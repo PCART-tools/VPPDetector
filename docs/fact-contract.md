@@ -75,6 +75,11 @@ helper. Scan consumes the unaffected-lookup proof without reconstructing names o
 descriptor behavior. Existing descriptors, conditional cache initialization and
 unknown replacement values still require producer evidence. Such partial facts
 do not establish complete helper effects or selected-argument handling.
+The producer may preserve read safety for builtin literal payloads carried
+through local aliases and all branches of an assignment. Scan consumes the same
+bounded write set and source evidence. Assessment still requires its own
+selected-argument and constructor-lifecycle facts; a recovered scan finding
+does not settle whether that argument is accepted or consumed downstream.
 
 Computed class-write names may carry a producer `class_name_literal` entry
 premise in `name_metadata`. The reader requires a `source_bound` canonical
