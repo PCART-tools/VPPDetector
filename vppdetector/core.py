@@ -114,6 +114,7 @@ def scan_function(
         state_key = (
             identity, state.parameter, state.kind, state.capture, state.conditional,
             _receiver_contexts(analysis, identity),
+            repr(analysis.inputs.get('expansion_context', {}).get('parameter_facts', {})),
         )
         if state_key in state.ancestry:
             boundaries.append(
@@ -588,6 +589,14 @@ def _expand_body(
     ):
         raise ResolutionError("No unique usable call edge for callee-body propagation.")
     child = context.adapter.expand(analysis, call.id)
+    if (call.caller == call.target or any(
+            not getattr(inner, 'analysis_contexts', ())
+            or any(item.get('incoming_call_id') != call.id for item in inner.analysis_contexts)
+            for inner in direct_calls(child, definition.identity))):
+        try:
+            child = context.adapter.expand(analysis, call.id, isolate=True)
+        except (ResolutionError, TypeError) as exc:
+            raise ResolutionError('Mixed incoming callable contexts cannot prove one path.') from exc
     summaries = [
         summary
         for summary in child.functions

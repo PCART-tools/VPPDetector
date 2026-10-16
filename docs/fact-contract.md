@@ -153,3 +153,16 @@ These records establish a conditional source path, not effect completeness,
 feasibility or runtime dispatch. Unknown class/call effects remain boundaries.
 The ordinary classmethod and constructor proof readers reject this query mode;
 assessment never obtains these facts from the scan cache.
+
+## Isolated incoming call contexts
+
+When an ordinary expansion merges incoming contexts, scan can request
+PCResolve's `expand(..., isolate=True)`. The adapter separately caches this
+snapshot and validates its `inputs.expansion_context` against the exact edge,
+caller, target and entry. Scan still checks every incoming call record and
+class/instance requirement before propagating the variadic carrier. Recursion
+keys include the producer's incoming parameter facts; unchanged contexts and
+the scan depth budget still stop traversal. Assessment retains ordinary
+expansion behavior. Finite generated source dispatch tables arrive through the
+existing producer candidate facts; VPPDetector does not evaluate comprehensions
+or reflective namespace expressions.

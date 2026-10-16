@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 
 from ._readonly import readonly
 from .source import _python_files
@@ -155,14 +155,27 @@ class PCResolveAdapter:
         self._analysis_cache[key] = readonly(self._analysis_cache[key])
         return self._analysis_cache[key]
 
-    def expand(self, analysis, call_id):
-        key = id(analysis), call_id
+    def expand(self, analysis, call_id, *, isolate=False):
+        key = (id(analysis), call_id, 'isolated') if isolate else (id(analysis), call_id)
         if key not in self._expansion_cache:
             self._validate(analysis)
             try:
-                result = self._analyzer.expand(analysis, call_id, additional_depth=1)
-            except (KeyError, RuntimeError, StopIteration, ValueError) as exc:
+                if isolate:
+                    result = self._analyzer.expand(analysis, call_id, additional_depth=1,
+                                                   isolate=True)
+                else:
+                    result = self._analyzer.expand(analysis, call_id, additional_depth=1)
+            except (KeyError, RuntimeError, StopIteration, ValueError, TypeError) as exc:
                 raise ResolutionError(str(exc)) from exc
+            if isolate:
+                edge = next(call for call in analysis.calls if call.id == call_id)
+                marker = result.inputs.get('expansion_context', {})
+                if (marker.get('incoming_call_id') != call_id
+                        or marker.get('caller') != asdict(edge.caller)
+                        or edge.target is None or marker.get('target') != asdict(edge.target)
+                        or result.entry != edge.target
+                        or not isinstance(marker.get('parameter_facts'), dict)):
+                    raise ResolutionError('PCResolve isolated incoming context is unavailable')
             self._validate(result)
             self._expansion_cache[key] = analysis, readonly(result)
         return self._expansion_cache[key][1]
