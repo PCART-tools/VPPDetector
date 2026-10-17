@@ -94,6 +94,31 @@ class SourceSpan:
 
 
 @dataclass(frozen=True)
+class ObservedKeywordCheck:
+    """Trusted, call-specific runtime checkpoint; never a static lookup proof.
+
+    The observation must come from an uncaught exception trace of the original
+    call. The entry and checker mappings contained this same primitive value,
+    and the checker lookup produced lookup_value at raise_span.
+    """
+
+    entry: FunctionIdentity
+    call_text: str
+    keyword: str
+    value: object
+    checker: FunctionIdentity
+    raise_span: SourceSpan
+    mapping_parameter: str
+    key_variable: str
+    lookup_variable: str
+    attribute_name: str
+    lookup_value: object
+    exception: str
+    uncaught: bool
+    source_hashes: Tuple[Tuple[Path, str], ...]
+
+
+@dataclass(frozen=True)
 class CallContext:
     """Original call and optional trusted, finite facts for that call only.
 
@@ -103,6 +128,9 @@ class CallContext:
     bound_receiver overrides the indexed method convention for unbound calls.
     known_targets confirms implementations at exact library call locations;
     copying a nominal PCResolve candidate is not an independent confirmation.
+    known_conditions supplies independently established predicate outcomes at
+    exact source spans. observed_keyword_checks supplies an explicit original
+    call trace checkpoint; these runtime facts never enter scan/producer caches.
     """
 
     expression: Union[str, ast.Call]
@@ -110,6 +138,8 @@ class CallContext:
     known_values: Tuple[Tuple[str, object], ...] = ()
     callsite: Optional[SourceSpan] = None
     known_targets: Tuple[Tuple[SourceSpan, FunctionIdentity], ...] = ()
+    known_conditions: Tuple[Tuple[SourceSpan, bool], ...] = ()
+    observed_keyword_checks: Tuple[ObservedKeywordCheck, ...] = ()
 
     def __post_init__(self) -> None:
         if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
@@ -127,6 +157,15 @@ class CallContext:
         spans = [span for span, _ in self.known_targets]
         if len(set(spans)) != len(spans):
             raise ValueError("known_targets requires unique library call locations")
+        conditions = [span for span, _ in self.known_conditions]
+        if (any(not isinstance(span, SourceSpan) or type(value) is not bool
+                for span, value in self.known_conditions)
+                or len(set(conditions)) != len(conditions)):
+            raise ValueError('known_conditions requires unique source spans and bool outcomes')
+        if (len(self.observed_keyword_checks) > 8
+                or any(not isinstance(value, ObservedKeywordCheck)
+                       for value in self.observed_keyword_checks)):
+            raise ValueError('observed_keyword_checks requires bounded observation records')
 
 
 @dataclass(frozen=True)

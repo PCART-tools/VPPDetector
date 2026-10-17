@@ -245,6 +245,16 @@ unused arguments and unresolved analysis do not establish that a deletion or
 rename is safe, and rejection evidence does not establish that a proposed
 modification succeeds.
 
+A supported, completed value/presence consumption can remain positive handling
+evidence across a later unsupported mapping effect or call, only after no raw
+selected value remains in any active frame, container or pending call argument.
+A validated exact scalar conversion can establish that distinction. Such a result retains
+the later boundary and uses `proven_consumption_before_boundary`; it does not
+claim successful completion or absence of later failures. An explicit
+parameter-specific rejection proved before analysis stops still takes
+precedence. Merely removing an optional key or calculating an unused value
+does not establish this consumption witness.
+
 ### Assessment coverage
 
 Current assessment covers changed keywords captured by `**kwargs` and selected
@@ -347,6 +357,28 @@ not captured by the target's corresponding variadic parameter also yields an
 unresolved assessment.
 
 ### Supplied call facts
+
+`CallContext.known_conditions` accepts trusted Boolean predicate outcomes at
+exact source spans. It applies only to conditions independent of the selected
+argument and cannot override a contradicting computed outcome. The supplied
+facts apply to this assessment; scan and producer caches are unaffected.
+
+An independently confirmed `known_targets` location with no producer target
+can support a source-signature rejection. An accepted signature still leaves
+body binding/effects unresolved. This mode never turns a nominal candidate
+into an independent target observation.
+
+`CallContext.observed_keyword_checks` accepts explicit `ObservedKeywordCheck`
+records from an uncaught original-call trace. The caller attests that the
+indexed entry and the reached mapping validator received the same selected
+primitive value, and records the lookup value and escaping exception. Assess
+matches the original call, entry/checker, key/lookup slots, attribute template,
+raise span, unchanged source hashes and a PCResolve `requires_observation`
+guard. A matched `None` lookup followed by the recorded `AttributeError` yields
+`observed_keyword_validation_rejection`. Missing or conflicting records remain
+unknown. The library neither executes the client nor collects/authenticates
+these caller-supplied observations. This is an observation-assisted result,
+not an improvement in unaided static recall or proof about other invocations.
 
 Additional facts must describe the supplied call and source version. A nominal
 PCResolve candidate does not independently confirm a runtime target; uncertain

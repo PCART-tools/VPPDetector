@@ -167,6 +167,18 @@ print(report.has_vpp)
 within the source root. It also works with `assess_change()`. Without a file
 hint it uses full-source preparation.
 
+For a concrete invocation, `CallContext` can additionally carry independently
+established `known_conditions`, `known_targets`, or `observed_keyword_checks`.
+`ObservedKeywordCheck` is an explicit trusted trace record, including the exact
+original call, entry/checker identities, primitive selected value, mapping and
+lookup slots, uncaught exception, raise span and source hashes. Assess checks
+it against PCResolve's neutral source guard before reporting an
+`observed_keyword_validation_rejection`. It does not execute a client script
+or collect these observations. These facts apply only to this invocation and
+never populate scan caches. See [supplied call facts](analysis-limits.md#supplied-call-facts)
+for the guarantees and limits. An assessment requiring these facts must be
+reported separately from unaided static results.
+
 A context must use the requested source root and import roots. Reuse it only
 for definitions and dependencies already in its fixed file set and while the
 source snapshot is unchanged. An entry outside that set needs a new context

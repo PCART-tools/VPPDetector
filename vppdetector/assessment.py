@@ -32,6 +32,7 @@ from ._analysis_context import (
     validate_depth as _validate_depth,
 )
 from ._fact_adapter import ResolutionError
+from ._observed_checks import keyword_check as observed_keyword_check
 from ._program_facts import (
     CallFacts,
     call_span,
@@ -71,6 +72,7 @@ class _Value:
     tracked: bool = False
     key_presence: bool = False
     source_state: bool = False
+    consumed: bool = False
 
 
 @dataclass
@@ -133,6 +135,23 @@ def _tracked(value: Any) -> bool:
     if isinstance(value, _KeySet):
         return any(value.items.values())
     return isinstance(value, _Value) and value.tracked
+
+
+def _raw_selected(value, seen=None):
+    """Keep unresolved original values distinct from proved scalar conversions."""
+    seen = set() if seen is None else seen
+    if id(value) in seen:
+        return False
+    seen.add(id(value))
+    if isinstance(value, _Value):
+        return value.tracked and not value.consumed
+    if isinstance(value, _Keywords):
+        return any(_raw_selected(item, seen) for item in value.items.values())
+    if isinstance(value, _Positionals):
+        return any(_raw_selected(item, seen) for item in value.items)
+    if isinstance(value, _SourceInstance):
+        return any(_raw_selected(item, seen) for item in value.attributes.values())
+    return isinstance(value, _KeySet) and _tracked(value)
 
 
 def _protected_state(value: Any) -> bool:
@@ -201,9 +220,12 @@ class _Proof:
     context: AnalysisContext
     max_depth: int
     known_targets: dict = field(default_factory=dict)
+    known_conditions: dict = field(default_factory=dict)
     evidence: list = field(default_factory=list)
     boundaries: list = field(default_factory=list)
     handled_reason: Optional[str] = None
+    consumption_witness: Optional[ParameterEvidence] = None
+    frames: list = field(default_factory=list, repr=False)
 
     def note(self, function, reason, detail, node=None, target=None):
         span = (
@@ -224,11 +246,24 @@ class _Proof:
         self.boundaries.append(
             AnalysisBoundary(reason, detail, function.identity, self.evidence[-1].callsite)
         )
+        if (reason in ('mapping_effect_unproven', 'call_target_unproven',
+                       'ordinary_container_binding_unproven')
+                and self.consumption_witness is not None and not any(
+                frame.expression_depth > 1 for frame in self.frames) and not any(
+                _raw_selected(value) for frame in self.frames
+                for value in [*frame.values.values(),
+                              *(v for pending in frame.pending_values for v in pending)])):
+            self.note(function, 'proven_consumption_before_boundary',
+                      'An earlier supported operation used the selected argument; '
+                      'later effects and call success remain unresolved.', node)
+            raise _Stop(ParameterState.HANDLED, 'proven_consumption_before_boundary')
         raise _Stop(ParameterState.UNKNOWN, reason)
 
     def handled(self, function, reason, detail, node=None, target=None):
         self.note(function, reason, detail, node, target)
         self.handled_reason = reason
+        if reason in ('consumed_presence', 'consumed_value'):
+            self.consumption_witness = self.evidence[-1]
 
     def bind(self, function, positional, keywords, bound, node=None, *, caller=None, change=None):
         signature = _signature(function, bound)
@@ -376,6 +411,14 @@ class _Proof:
                     or effect.get("conditions")
                 ):
                     return False
+            elif target in ('inspect.cleandoc', 'textwrap.dedent'):
+                if (kind != ('builtin_call', 'data_only')
+                        or effect.get('protocol') != 'stdlib_text_normalization'
+                        or effect.get('input_shapes') != [['str']]
+                        or effect.get('output_shape') != 'str'
+                        or effect.get('completion') != 'normal_return'
+                        or 'standard_library_text_protocols_hold' not in fact['assumptions']):
+                    return False
             elif target == "str.join":
                 if (
                     kind != ("builtin_call", "data_only")
@@ -391,12 +434,13 @@ class _Proof:
         if str(function.identity.file_path) not in hashes:
             return False
         try:
-            if any(
-                hashlib.sha256(Path(path).read_bytes()).hexdigest() != digest
-                for path, digest in hashes.items()
-            ):
-                return False
-        except OSError:
+            for path, digest in hashes.items():
+                # Match the producer's decoded, universal-newline source snapshot.
+                with Path(path).open(encoding='utf-8-sig') as stream:
+                    actual = hashlib.sha256(stream.read().encode('utf-8')).hexdigest()
+                if actual != digest:
+                    return False
+        except (OSError, UnicodeError):
             return False
         self.note(
             function,
@@ -443,7 +487,11 @@ class _Proof:
         frame = _Frame(
             self, function, analysis, values, ancestry + (function.identity,), dict(facts)
         )
-        frame.statements(function.node.body)
+        self.frames.append(frame)
+        try:
+            frame.statements(function.node.body)
+        finally:
+            self.frames.pop()
         return frame.result
 
 
@@ -458,6 +506,8 @@ class _Frame:
     returned: bool = False
     rejection_guard: bool = False
     result: Any = field(default_factory=_Value)
+    pending_values: list = field(default_factory=list, repr=False)
+    expression_depth: int = 0
 
     def unknown(self, reason, node):
         self.proof.unknown(
@@ -614,6 +664,18 @@ class _Frame:
             elif isinstance(statement, ast.If):
                 condition = self.expression(statement.test)
                 truth = self.truth(condition)
+                span = SourceSpan(self.function.identity.file_path, statement.test.lineno,
+                                  statement.test.col_offset, statement.test.end_lineno,
+                                  statement.test.end_col_offset)
+                if (span in self.proof.known_conditions
+                        and not self.related(statement.test)):
+                    supplied = self.proof.known_conditions[span]
+                    if truth is not None and truth is not supplied:
+                        self.unknown('conflicting_call_facts', statement.test)
+                    truth = supplied
+                    self.proof.note(self.function, 'supplied_condition_fact',
+                                    'Caller supplied the global predicate outcome: '
+                                    + str(supplied), statement.test)
                 if truth is None:
                     if self.normal_path_guard(statement):
                         continue
@@ -719,6 +781,13 @@ class _Frame:
         return None
 
     def expression(self, node):
+        self.expression_depth += 1
+        try:
+            return self._expression(node)
+        finally:
+            self.expression_depth -= 1
+
+    def _expression(self, node):
         if isinstance(node, ast.Constant):
             return _finite(node)
         if isinstance(node, ast.Name):
@@ -921,6 +990,13 @@ class _Frame:
         return positional, keywords
 
     def call(self, node):
+        self.pending_values.append([])
+        try:
+            return self._call(node)
+        finally:
+            self.pending_values.pop()
+
+    def _call(self, node):
         if self.analysis is None:
             # Client expressions are opaque: no user code, including nested
             # argument calls, is executed or attributed to the library source.
@@ -1044,6 +1120,7 @@ class _Frame:
         if self.related(node.func):
             self.unknown("call_target_unproven", node)
         positional, keywords = self.arguments(node)
+        self.pending_values[-1] = positional + list(keywords.values())
         truth_protocol = scalar_truth_protocol(self.analysis, facts) if facts else None
         if truth_protocol is not None and len(positional) == 1 and not keywords:
             value = positional[0]
@@ -1052,7 +1129,7 @@ class _Frame:
                 truth = self.truth(value)
                 self.proof.note(self.function, 'builtin_scalar_truth',
                                 f'Exact scalar conversion: {truth}.', node)
-                return _Value(truth, _tracked(value), _key_presence(value))
+                return _Value(truth, _tracked(value), _key_presence(value), consumed=True)
         if facts and len(facts.result_sources) == 1:
             protocol = copy_protocol_target(
                 self.function, self.analysis, facts, facts.result_sources[0]
@@ -1121,6 +1198,18 @@ class _Frame:
             if any(_protected_state(item) for item in positional + list(keywords.values())):
                 self.unknown("callable_instance_state_effects_unproven", node)
             return _Value()
+        confirmed = self.proof.known_targets.get(call_span(facts)) if facts else None
+        if facts and facts.target is None and confirmed is not None:
+            target = self.proof.context.index.find(confirmed)
+            if target is None or target.is_overload or target.node.decorator_list:
+                self.unknown('conflicting_target_fact', node)
+            self.proof.note(self.function, 'confirmed_call_target',
+                            'Caller supplied this unresolved call target for signature rejection '
+                            'only; body binding and effects remain unproved.',
+                            node, target.identity)
+            self.proof.bind(target, positional, keywords, target.is_bound_method, node,
+                            caller=self.function)
+            self.unknown('confirmed_target_body_unproven', node)
         if not facts or not facts.target or captured and not isinstance(local, _LocalFunction):
             self.unknown("call_target_unproven", node)
         status = _target_status(self.analysis, facts)
@@ -1513,7 +1602,7 @@ def assess_change(
     text = ast.unparse(node) if node else str(call.expression)
     _, context = _prepare_context(source, import_roots, context)
     entry = None
-    proof = _Proof(context, max_depth, dict(call.known_targets))
+    proof = _Proof(context, max_depth, dict(call.known_targets), dict(call.known_conditions))
     state, reason = ParameterState.UNKNOWN, "target_api_unavailable"
     try:
         if context is None:
@@ -1592,6 +1681,19 @@ def assess_change(
             elif not (receiver_name and name.startswith(receiver_name + ".")):
                 proof.unknown(entry, "unsupported_call_fact", f"No supported binding for {name}.")
         proof.note(entry, "entry_binding", f"{change.old_name} captured by {destination}.")
+        if call.observed_keyword_checks:
+            observation = observed_keyword_check(context, entry, call, change, original.literal)
+            if observation is None:
+                proof.unknown(entry, 'observed_keyword_check_unconfirmed',
+                              'The checkpoint does not match this call and source guard.')
+            proof.note(context.index.find(observation.checker), 'runtime_keyword_checkpoint',
+                       'Caller supplied an uncaught original-call trace: the entry and validator '
+                       'received the selected value, and attribute lookup returned None. '
+                       'This is runtime evidence, not static path or lookup confirmation.',
+                       node=observation.raise_span, target=observation.checker)
+            proof.reject(entry, 'observed_keyword_validation_rejection',
+                         change.old_name + ' reaches the observed source rejection guard.',
+                         target=observation.checker)
         proof.run(entry, values, facts=call.known_values)
         state = ParameterState.HANDLED if proof.handled_reason else ParameterState.IGNORED
         reason = proof.handled_reason or "unused_parameter"
