@@ -309,6 +309,12 @@ of each result.
   source hashes. Assess matches these against PCResolve source obligations;
   missing or conflicting evidence remains unknown. This supplies a concrete
   consumption witness without serializing argument values or object graphs.
+- `observed_attribute_retentions`: bounded `ObservedAttributeRetention` records
+  for an original class invocation that completes normally and retains the
+  same keyword capture and selected primitive in the returned instance's plain
+  attribute state. A matching PCResolve constructor-store obligation is also
+  required; the caller independently confirms construction and attribute
+  protocols, original receiver identity, completed store and final retention.
 
 Known values accept `str`, `bytes`, `int`, `float`, `bool` and `None`;
 `None` is distinct from an unknown value. Names and known-target locations

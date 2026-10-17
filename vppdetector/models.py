@@ -120,6 +120,29 @@ class ObservedKeywordCheck:
 
 
 @dataclass(frozen=True)
+class ObservedAttributeRetention:
+    """Trusted completed class construction retaining the original keyword capture.
+
+    The original invocation used type.__call__, object.__new__ and ordinary
+    object attribute access/store. Its original constructor receiver is the
+    returned instance, whose plain state retains the same builtin capture dict
+    and selected primitive after this source assignment and normal completion.
+    """
+
+    entry: FunctionIdentity
+    call_text: str
+    keyword: str
+    value: object
+    attribute: str
+    store_span: SourceSpan
+    retained_builtin_dict: bool
+    construction_confirmed: bool
+    store_completed: bool
+    completed_normally: bool
+    source_hashes: Tuple[Tuple[Path, str], ...]
+
+
+@dataclass(frozen=True)
 class ObservedContainerPredicate:
     """Trusted execution of a source predicate on the selected argument's carrier.
 
@@ -191,6 +214,7 @@ class CallContext:
     observed_keyword_checks: Tuple[ObservedKeywordCheck, ...] = ()
     observed_normal_returns: Tuple[ObservedNormalReturn, ...] = ()
     observed_container_predicates: Tuple[ObservedContainerPredicate, ...] = ()
+    observed_attribute_retentions: Tuple[ObservedAttributeRetention, ...] = ()
 
     def __post_init__(self) -> None:
         if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
@@ -229,6 +253,13 @@ class CallContext:
             raise ValueError('observed_container_predicates requires bounded observation records')
         if self.observed_container_predicates and (
                 self.observed_normal_returns or self.observed_keyword_checks):
+            raise ValueError('Supply one observation family for an assessment')
+        if (len(self.observed_attribute_retentions) > 8 or any(
+                not isinstance(value, ObservedAttributeRetention)
+                for value in self.observed_attribute_retentions)):
+            raise ValueError('observed_attribute_retentions requires bounded observation records')
+        if self.observed_attribute_retentions and (self.observed_container_predicates
+                or self.observed_normal_returns or self.observed_keyword_checks):
             raise ValueError('Supply one observation family for an assessment')
 
 

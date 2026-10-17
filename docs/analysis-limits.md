@@ -377,6 +377,20 @@ entry binding and source snapshot checks still apply. Scan is unchanged.
 
 ### Supplied call facts
 
+`CallContext.observed_attribute_retentions` can establish observation-assisted
+`handled` when an original constructor capture survives in the returned
+instance's ordinary attribute state. The caller must independently confirm
+`type.__call__`, default `object.__new__`, ordinary object attribute access and
+store, the original receiver's identity as the returned instance, execution of
+the recorded assignment and normal class-call completion. The retained object
+must be the same exact builtin capture dictionary with the same selected
+primitive. Assess also checks PCResolve's neutral direct-store obligation,
+source assignment, original call, entry, value and hashes. Missing/conflicting
+evidence remains `unknown`. This proves retained state, not that a later method
+reads it or that the old and new APIs are compatible. Observation families
+cannot be mixed. VPPDetector neither runs nor authenticates these observations;
+source caches and scan remain unchanged.
+
 `CallContext.observed_container_predicates` accepts trusted evidence of an actual
 completed predicate on a builtin dictionary or tuple containing the selected
 original element. Supported source predicates are container truth, string-key

@@ -31,6 +31,7 @@ from ._analysis_context import (
 from ._analysis_context import (
     validate_depth as _validate_depth,
 )
+from ._attribute_retention import attribute_retention as observed_attribute_retention
 from ._container_predicates import container_predicate as observed_container_predicate
 from ._fact_adapter import ResolutionError
 from ._mapping_key_access import closed_keys as closed_mapping_keys
@@ -1705,6 +1706,19 @@ def assess_change(
             elif not (receiver_name and name.startswith(receiver_name + ".")):
                 proof.unknown(entry, "unsupported_call_fact", f"No supported binding for {name}.")
         proof.note(entry, "entry_binding", f"{change.old_name} captured by {destination}.")
+        if call.observed_attribute_retentions:
+            transfer = observed_attribute_retention(context, entry, call, change, original.literal)
+            if transfer is None:
+                proof.unknown(entry, 'observed_attribute_retention_unconfirmed',
+                              'Construction, original capture retention, normal completion or '
+                              'source-store evidence is missing or conflicting.')
+            observed = call.observed_attribute_retentions[0]
+            proof.note(entry, 'runtime_instance_attribute_retention',
+                       'Caller independently confirmed ordinary class construction and the '
+                       'returned original receiver retaining this same builtin capture dict '
+                       'and selected primitive after the source store and normal completion.',
+                       node=observed.store_span)
+            raise _Stop(ParameterState.HANDLED, 'observed_instance_attribute_retention')
         if call.observed_container_predicates:
             predicate = observed_container_predicate(context, entry, call, change)
             if predicate is None:
