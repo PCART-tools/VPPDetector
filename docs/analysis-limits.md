@@ -368,7 +368,8 @@ PCResolve may establish a closed `mapping_key_accesses` footprint for a
 `**kwargs` capture. If all tracked elements have keys outside that footprint,
 assessment can establish `unread_mapping_element` without interpreting unrelated
 loops or branches. Only fixed string-key subscriptions, membership and `get`
-accesses are covered. Whole-container forwarding, aliases, mutation, dynamic
+accesses and fixed-key `pop` calls are covered. Whole-container forwarding,
+aliases, non-key-local mutation, dynamic
 keys, nested capture and visible namespace/frame inspection prevent this proof.
 It assumes no external frame introspection and establishes element non-use,
 not that the function reaches a return or the original call succeeds. Decorator,

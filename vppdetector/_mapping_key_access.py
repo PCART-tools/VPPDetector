@@ -42,7 +42,7 @@ def closed_keys(analysis, function):
     seen = set()
     for item in accesses:
         if (not isinstance(item, dict)
-                or item.get('operation') not in {'get', 'getitem', 'contains'}
+                or item.get('operation') not in {'get', 'getitem', 'contains', 'pop'}
                 or type(item.get('key')) is not str or not isinstance(item.get('evidence'), dict)):
             return None
         span = item['evidence']
