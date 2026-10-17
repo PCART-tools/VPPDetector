@@ -360,6 +360,12 @@ destinations do not gain a binding proof. Membership in a finite tuple/list is
 evaluated only for known primitive operands, without invoking application equality.
 Exact unpacking of a variadic capture also consumes element presence through its
 arity requirement, including when that element's eventual payload is discarded.
+After a completed parameter-use witness, an unrelated unpack into ordinary local
+names can join its failure path with a checked continuation using unknown locals.
+That failure cannot undo the earlier use. The possible early termination remains
+recorded across helper returns: a rejection found only in the continuation stays
+UNKNOWN. Unproved unpacking before parameter use, or unpacking that involves the
+selected argument, still stops analysis.
 
 A function-local from-import may continue under a matching PCResolve
 `source_cached_import_binding` fact. This requires prior unconditional source

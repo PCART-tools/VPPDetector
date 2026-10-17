@@ -236,6 +236,7 @@ class _Proof:
     handled_reason: Optional[str] = None
     consumption_witness: Optional[ParameterEvidence] = None
     frames: list = field(default_factory=list, repr=False)
+    unrelated_unpack_continuation: bool = False
 
     def note(self, function, reason, detail, node=None, target=None):
         span = (
@@ -354,6 +355,10 @@ class _Proof:
         return values
 
     def reject(self, function, reason, detail, node=None, target=None):
+        if self.unrelated_unpack_continuation:
+            self.unknown(function, 'rejection_after_unconfirmed_unpack',
+                         'An earlier unrelated unpack may terminate after a proven use; '
+                         'this later rejection is not definitely reached.', node)
         self.note(function, reason, detail, node, target or function.identity)
         raise _Stop(ParameterState.REJECTED, reason)
 
@@ -713,6 +718,29 @@ class _Frame:
                 )
                 for target in targets:
                     if isinstance(target, (ast.Tuple, ast.List)):
+                        names = [child.id for child in ast.walk(target)
+                                 if isinstance(child, ast.Name)]
+                        plain = all(isinstance(child, (ast.Tuple, ast.List, ast.Name,
+                                                      ast.Store, ast.Load))
+                                    for child in ast.walk(target))
+                        if (not isinstance(result, _Positionals) and plain
+                                and self.proof.consumption_witness is not None
+                                and not self.related(statement) and not _tracked(result)
+                                and not _protected_state(result)):
+                            for name in names:
+                                if isinstance(self.values.get(name), _LocalFunction):
+                                    self.unknown('local_callable_rebinding', statement)
+                                self.values[name] = _Value()
+                                for path in tuple(self.facts):
+                                    if path == name or path.startswith(name + '.'):
+                                        del self.facts[path]
+                            self.proof.unrelated_unpack_continuation = True
+                            self.proof.note(self.function, 'unrelated_unpack_after_consumption',
+                                            'The selected argument was already used. If this '
+                                            'unrelated unpack fails, that use remains; otherwise '
+                                            'the continuation is checked with unknown locals.',
+                                            statement)
+                            continue
                         for name, item in self.finite_unpack(target, result):
                             if isinstance(self.values.get(name), _LocalFunction):
                                 self.unknown('local_callable_rebinding', statement)
