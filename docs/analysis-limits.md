@@ -347,6 +347,30 @@ can be decided without comparing payloads. A finite `and`/`or` tree of local
 outcomes give the same final Boolean. Calls, attributes, custom truth protocols
 and other comparisons do not acquire this branch proof.
 
+An exact PCResolve `builtin_container_length` obligation permits `len` over a
+finite builtin capture/container or a known primitive string/bytes value.
+The consumer checks the builtin target, call binding, source span/hash and every
+input/completion/effect condition. Unknown objects and shadowed targets remain
+unresolved. Length results preserve selected-element presence independently of
+payload values; a discarded length does not itself imply consumption.
+
+Finite builtin tuple/list values can be unpacked into a matching tree of ordinary
+local names. Unknown iterables, mismatched lengths, starred targets and attribute
+destinations do not gain a binding proof. Membership in a finite tuple/list is
+evaluated only for known primitive operands, without invoking application equality.
+Exact unpacking of a variadic capture also consumes element presence through its
+arity requirement, including when that element's eventual payload is discarded.
+
+A function-local from-import may continue under a matching PCResolve
+`source_cached_import_binding` fact. This requires prior unconditional source
+initialization of the imported module, a unique source export, ordinary module
+lookup, matching initialization/import evidence and hashes. The evidence retains
+the standard import, preserved source-module cache/namespace and no external
+import-hook or indirect mutation premises. Imported names replace prior local
+bindings and invalidate matching supplied facts. New, relative or unproved
+imports retain `local_import_execution_unconfirmed`; arbitrary module execution
+is not inferred harmless, and runtime import success is not established.
+
 Finite guards support `isinstance()` against unshadowed built-in `str`, `bytes`,
 `int`, `float`, `bool` and `object` types, and `startswith()` / `endswith()` on
 known strings with one known string argument. Unknown values, shadowed built-ins

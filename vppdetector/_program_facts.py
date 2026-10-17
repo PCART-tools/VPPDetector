@@ -63,6 +63,32 @@ def scalar_truth_protocol(analysis, call):
     return fact
 
 
+def container_length_protocol(analysis, call):
+    """Read a length obligation; the consumer must establish the exact input type."""
+    fact = getattr(call, 'implicit_protocol', {})
+    if (not isinstance(fact, dict) or fact.get('kind') != 'builtin_container_length'
+            or fact.get('builtin') != 'len' or call.callee_name != 'len'
+            or call.target is not None or call.target_status != 'python_protocol'
+            or call.binding_status != 'complete' or call.binding_issues or call.effects
+            or fact.get('status') != 'requires_exact_input'
+            or fact.get('runtime_input_confirmed') is not False
+            or fact.get('precondition') != {'argument': {'position': 0},
+                'exact_types': ['dict', 'list', 'tuple', 'str', 'bytes', 'set', 'frozenset']}
+            or fact.get('completion') != 'normal_return_if_precondition'
+            or fact.get('effects') != 'none_if_precondition'
+            or fact.get('call_id') != call.id
+            or fact.get('source_hash') != analysis.inputs.get('sha256', {}).get(
+                call.caller.file_path)
+            or not isinstance(fact.get('evidence'), dict)
+            or fact['evidence'].get('file_path') != call.caller.file_path
+            or _location(fact['evidence']) != (call.lineno, call.col_offset,
+                                              call.end_lineno, call.end_col_offset)
+            or any(item.get('implicit_protocol') != fact
+                   for item in getattr(call, 'analysis_contexts', ()))):
+        return None
+    return fact
+
+
 def source_alias_entry(analysis, requested):
     """Read a lexical API reference without claiming runtime attribute binding."""
     fact = analysis.inputs.get('entry_alias', {})

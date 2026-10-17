@@ -33,6 +33,7 @@ from ._analysis_context import (
     validate_depth as _validate_depth,
 )
 from ._attribute_retention import attribute_retention as observed_attribute_retention
+from ._cached_imports import cached_import_binding
 from ._capture_rejection import capture_rejection as observed_capture_rejection
 from ._container_predicates import container_predicate as observed_container_predicate
 from ._fact_adapter import ResolutionError
@@ -46,6 +47,7 @@ from ._program_facts import (
     candidate_identities,
     capture_names,
     conditions_possible,
+    container_length_protocol,
     copy_protocol_target,
     direct_calls,
     identity_from_target,
@@ -710,6 +712,15 @@ class _Frame:
                     statement.targets if isinstance(statement, ast.Assign) else (statement.target,)
                 )
                 for target in targets:
+                    if isinstance(target, (ast.Tuple, ast.List)):
+                        for name, item in self.finite_unpack(target, result):
+                            if isinstance(self.values.get(name), _LocalFunction):
+                                self.unknown('local_callable_rebinding', statement)
+                            self.values[name] = item
+                            for path in tuple(self.facts):
+                                if path == name or path.startswith(name + '.'):
+                                    del self.facts[path]
+                        continue
                     if not isinstance(target, ast.Name):
                         capture = self.function.signature.kwarg
                         mapping_store = (
@@ -754,6 +765,21 @@ class _Frame:
                             del self.facts[name]
             elif isinstance(statement, ast.Expr):
                 self.expression(statement.value)
+            elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+                binding = cached_import_binding(self.analysis, self.function, statement)
+                if binding is None:
+                    self.unknown('local_import_execution_unconfirmed', statement)
+                for value in binding['bindings']:
+                    name = value['name']
+                    self.values[name] = _Value()
+                    for path in tuple(self.facts):
+                        if path == name or path.startswith(name + '.'):
+                            del self.facts[path]
+                self.proof.note(self.function, 'source_cached_import_binding',
+                                'Source initialization already imported this module. '
+                                'Continuation assumes the recorded import cache and namespace '
+                                'bindings remain unchanged: ' + '; '.join(binding['assumptions']),
+                                statement)
             elif isinstance(statement, ast.If):
                 condition = self.expression(statement.test)
                 truth = self.truth(condition)
@@ -874,6 +900,25 @@ class _Frame:
             else:
                 self.unknown("unsupported_control_flow", statement)
 
+    def finite_unpack(self, target, value, depth=0):
+        """Bind exact builtin tuple/list shapes without invoking an iterator protocol."""
+        if depth > 8:
+            self.unknown('unpacking_binding_unproven', target)
+        if isinstance(target, ast.Name):
+            return [(target.id, value)]
+        if (not isinstance(target, (ast.Tuple, ast.List))
+                or not isinstance(value, _Positionals)
+                or value.kind not in ('tuple', 'list')
+                or len(target.elts) != len(value.items) or len(target.elts) > 1000):
+            self.unknown('unpacking_binding_unproven', target)
+        result = []
+        for child, item in zip(target.elts, value.items):
+            result.extend(self.finite_unpack(child, item, depth + 1))
+        if value.carrier and _tracked(value):
+            self.proof.handled(self.function, 'consumed_presence',
+                               'Exact unpacking requires the selected captured element.', target)
+        return result
+
     @staticmethod
     def truth(value):
         if isinstance(value, (_Keywords, _Positionals, _KeySet)):
@@ -927,6 +972,8 @@ class _Frame:
         if isinstance(node, (ast.Tuple, ast.List)):
             return _Positionals(
                 tuple(self.positional_items(node.elts)),
+                carrier=any(isinstance(child, ast.Starred) and self.related(child.value)
+                            for child in node.elts),
                 kind="tuple" if isinstance(node, ast.Tuple) else "list",
             )
         if isinstance(node, ast.Subscript):
@@ -1019,6 +1066,15 @@ class _Frame:
             lval = left.literal if isinstance(left, _Value) else _UNKNOWN
             rval = right.literal if isinstance(right, _Value) else _UNKNOWN
             operation = node.ops[0]
+            if isinstance(operation, (ast.In, ast.NotIn)) and isinstance(right, _Positionals):
+                primitives = (str, bytes, int, float, bool, type(None))
+                if (type(lval) not in primitives or any(
+                        not isinstance(item, _Value) or type(item.literal) not in primitives
+                        for item in right.items)):
+                    self.unknown('sequence_membership_unproven', node)
+                present = lval in tuple(item.literal for item in right.items)
+                return _Value(present if isinstance(operation, ast.In) else not present,
+                              _tracked(left) or _tracked(right))
             if (isinstance(operation, (ast.Eq, ast.NotEq))
                     and isinstance(left, _Keywords) and isinstance(right, _Keywords)
                     and (not left.items or not right.items)):
@@ -1245,6 +1301,20 @@ class _Frame:
             self.unknown("call_target_unproven", node)
         positional, keywords = self.arguments(node)
         self.pending_values[-1] = positional + list(keywords.values())
+        length_protocol = container_length_protocol(self.analysis, facts) if facts else None
+        if length_protocol is not None and len(positional) == 1 and not keywords:
+            value = positional[0]
+            if isinstance(value, (_Keywords, _Positionals, _KeySet)):
+                length = len(value.items)
+            elif isinstance(value, _Value) and type(value.literal) in (str, bytes):
+                length = len(value.literal)
+            else:
+                self.unknown('length_input_unproven', node)
+            self.proof.note(self.function, 'builtin_container_length',
+                            'Exact builtin input discharges the source length obligation.', node)
+            return _Value(length, _tracked(value),
+                          isinstance(value, (_Keywords, _KeySet)) and _tracked(value),
+                          consumed=True)
         truth_protocol = scalar_truth_protocol(self.analysis, facts) if facts else None
         if truth_protocol is not None and len(positional) == 1 and not keywords:
             value = positional[0]
