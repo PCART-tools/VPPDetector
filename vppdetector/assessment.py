@@ -31,6 +31,7 @@ from ._analysis_context import (
 from ._analysis_context import (
     validate_depth as _validate_depth,
 )
+from ._container_predicates import container_predicate as observed_container_predicate
 from ._fact_adapter import ResolutionError
 from ._mapping_key_access import closed_keys as closed_mapping_keys
 from ._normal_returns import mapping_return as observed_mapping_return
@@ -1704,6 +1705,20 @@ def assess_change(
             elif not (receiver_name and name.startswith(receiver_name + ".")):
                 proof.unknown(entry, "unsupported_call_fact", f"No supported binding for {name}.")
         proof.note(entry, "entry_binding", f"{change.old_name} captured by {destination}.")
+        if call.observed_container_predicates:
+            predicate = observed_container_predicate(context, entry, call, change)
+            if predicate is None:
+                proof.unknown(entry, 'observed_container_predicate_unconfirmed',
+                              'Container type, original-element provenance, execution or source '
+                              'evidence is missing or conflicting.')
+            observed = call.observed_container_predicates[0]
+            proof.note(context.index.find(observed.checker), 'runtime_container_predicate',
+                       'Caller traced the original selected element/presence into this exact '
+                       'builtin container, observed this source predicate completing, and '
+                       'confirmed normal completion of the original entry body. '
+                       'The predicate consumes container presence, not a compatibility verdict.',
+                       node=observed.predicate_span)
+            raise _Stop(ParameterState.HANDLED, 'observed_container_predicate_consumption')
         if call.observed_normal_returns:
             transfer = observed_mapping_return(context, entry, call, change, original.literal)
             if transfer is None:

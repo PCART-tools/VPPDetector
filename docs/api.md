@@ -302,6 +302,13 @@ of each result.
   hashes. HANDLED additionally requires a matching PCResolve fresh-mapping
   retention proof; an observation alone is insufficient. These facts are trusted
   caller input and are reported as observation-assisted evidence.
+- `observed_container_predicates`: bounded `ObservedContainerPredicate` records
+  for completed truth, membership or builtin-length predicates on an exact
+  builtin dictionary or tuple. The caller independently confirms the selected
+  element's origin, original-call normal completion, predicate outcome and
+  source hashes. Assess matches these against PCResolve source obligations;
+  missing or conflicting evidence remains unknown. This supplies a concrete
+  consumption witness without serializing argument values or object graphs.
 
 Known values accept `str`, `bytes`, `int`, `float`, `bool` and `None`;
 `None` is distinct from an unknown value. Names and known-target locations

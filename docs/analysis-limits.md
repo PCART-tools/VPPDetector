@@ -376,6 +376,23 @@ entry binding and source snapshot checks still apply. Scan is unchanged.
 
 ### Supplied call facts
 
+`CallContext.observed_container_predicates` accepts trusted evidence of an actual
+completed predicate on a builtin dictionary or tuple containing the selected
+original element. Supported source predicates are container truth, string-key
+membership and an unshadowed builtin `len` compared with an integer. Only the
+definitely evaluated first operand of a Boolean expression is covered. Entry,
+original call, selected key or positional index, checker, source spans, hashes,
+container size and observed outcome must match PCResolve's neutral
+`requires_observation` obligations. The caller must independently establish
+element provenance, exact builtin type and normal completion of the original
+entry invocation. Tuples require index-preserving provenance. This yields
+observation-assisted `handled` for presence/structure consumption; it does not
+assert numeric influence on a result or compatibility. Conflicting observation
+families are rejected, missing evidence keeps `unknown`, and an assessment
+without observations remains independent. The library does not collect or
+authenticate these observations, execute client expressions or load object
+graphs. Scan is unchanged.
+
 `CallContext.observed_normal_returns` accepts bounded `ObservedNormalReturn`
 attestations that the original call reached the identified source frame with the
 same captured primitive and returned an exact builtin dictionary normally at the

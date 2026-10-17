@@ -120,6 +120,34 @@ class ObservedKeywordCheck:
 
 
 @dataclass(frozen=True)
+class ObservedContainerPredicate:
+    """Trusted execution of a source predicate on the selected argument's carrier.
+
+    The caller independently establishes that this original call entered entry,
+    the original element/presence reached selection in the checker's exact builtin
+    container, this predicate completed, and the entry body completed normally.
+    No runtime object graphs or argument values are accepted in this record.
+    """
+
+    entry: FunctionIdentity
+    call_text: str
+    parameter_name: str
+    old_position: Optional[int]
+    checker: FunctionIdentity
+    predicate_span: SourceSpan
+    container_parameter: str
+    container_kind: str
+    selection: Union[str, int]
+    container_size: int
+    key_variable: Optional[str]
+    predicate_value: bool
+    origin_confirmed: bool
+    predicate_completed: bool
+    completed_normally: bool
+    source_hashes: Tuple[Tuple[Path, str], ...]
+
+
+@dataclass(frozen=True)
 class ObservedNormalReturn:
     """Trusted original-call completion with the same captured primitive value.
 
@@ -162,6 +190,7 @@ class CallContext:
     known_conditions: Tuple[Tuple[SourceSpan, bool], ...] = ()
     observed_keyword_checks: Tuple[ObservedKeywordCheck, ...] = ()
     observed_normal_returns: Tuple[ObservedNormalReturn, ...] = ()
+    observed_container_predicates: Tuple[ObservedContainerPredicate, ...] = ()
 
     def __post_init__(self) -> None:
         if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
@@ -194,6 +223,13 @@ class CallContext:
             raise ValueError('observed_normal_returns requires bounded observation records')
         if self.observed_normal_returns and self.observed_keyword_checks:
             raise ValueError('Normal-return and uncaught-rejection observations conflict')
+        if (len(self.observed_container_predicates) > 8 or any(
+                not isinstance(value, ObservedContainerPredicate)
+                for value in self.observed_container_predicates)):
+            raise ValueError('observed_container_predicates requires bounded observation records')
+        if self.observed_container_predicates and (
+                self.observed_normal_returns or self.observed_keyword_checks):
+            raise ValueError('Supply one observation family for an assessment')
 
 
 @dataclass(frozen=True)
