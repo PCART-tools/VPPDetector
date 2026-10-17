@@ -14,6 +14,7 @@ from ._program_facts import (
     call_span,
     candidate_identities,
     capture_names,
+    conditional_constructor_signature,
     conditional_path_conditions,
     conditional_source_binding,
     conditions_possible,
@@ -72,6 +73,7 @@ class _State:
     analysis: Any = field(default=None, compare=False, repr=False)
     capture: bool = False
     conditional: bool = False
+    constructor_query: bool = False
 
 
 def scan_function(
@@ -103,19 +105,25 @@ def scan_function(
                 AnalysisBoundary(exc.code, str(exc), identity), entry, state
             ))
             continue
-        if (state.analysis is None and state.function.query_class is not None
-                and any(boundary.get('reason') == 'source_lookup_candidate'
-                        for boundary in analysis.boundaries)):
+        if (state.analysis is None and (
+                state.function.query_class is not None
+                and any(b.get('reason') == 'source_lookup_candidate' for b in analysis.boundaries)
+                or any(b.get('reason') == 'constructor_binding_unconfirmed'
+                       for b in analysis.boundaries))):
             try:
-                conditioned = context.adapter.analyze(state.function.query_class,
-                                                      conditional_source_state=True)
+                conditioned = context.adapter.analyze(
+                    state.function.query_class or state.function.query_alias or identity,
+                    conditional_source_state=True)
             except ResolutionError as exc:
                 boundaries.append(_root_boundary(AnalysisBoundary(
                     "conditional_source_query_unavailable",
                     "Conditional source query unavailable: " + str(exc), identity,
                 ), entry, state))
             else:
-                conditional_state = replace(state, analysis=conditioned, conditional=True)
+                conditional_state = replace(
+                    state, analysis=conditioned, conditional=True,
+                    constructor_query=state.function.query_class is None,
+                )
                 if conditional_state not in pending:
                     pending.append(conditional_state)
         state_key = (
@@ -136,6 +144,9 @@ def scan_function(
         schema = getattr(analysis, "schema_version", schema)
         relevant_calls = set()
         for call in direct_calls(analysis, identity):
+            if (state.constructor_query
+                    and conditional_constructor_signature(analysis, call) is None):
+                continue
             if _call_depends_on_parameter(call, state.parameter):
                 relevant_calls.add(call.id)
             capture_flows = _capture_flows(context, analysis, state, call)
@@ -220,16 +231,18 @@ def scan_function(
                     or any("lookup_preservation" in fact
                            for fact in getattr(call, "class_method_bindings", ()))
                     or getattr(call, 'conditional_source_bindings', ())
+                    and call.target_status != 'constructor'
                     or analysis.inputs.get('conditional_source_state') is True
                     and call.target_status in ('super_new', 'super_method', 'classmethod')):
                 if (source_classmethod_binding(analysis, call) is None
                         and conditional_source_binding(analysis, call) is None):
                     targets = ()
             constructor_fact = source_constructor_binding(analysis, call)
+            constructor_signature = conditional_constructor_signature(analysis, call)
             if ((getattr(call, "constructor_bindings", ())
                     or call.target_status == "constructor" and selected is not None
                     and selected.qualname.endswith((".__new__", ".__init__")))
-                    and constructor_fact is None):
+                    and constructor_fact is None and constructor_signature is None):
                 targets = ()
             if not targets:
                 boundaries.append(
@@ -328,6 +341,13 @@ def scan_function(
                         if flow.get("target_path"):
                             next_parameter = None
                     captured = flow.get("target_capture") is not None
+                    if constructor_signature is not None:
+                        boundaries.append(AnalysisBoundary(
+                            'conditional_constructor_body_not_followed',
+                            'The conditional constructor reference establishes only a signature.',
+                            identity, span,
+                        ))
+                        continue
                     if not captured and next_parameter not in _parameters(definition):
                         boundaries.append(
                             AnalysisBoundary(

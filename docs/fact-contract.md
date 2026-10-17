@@ -155,6 +155,13 @@ conditions; opposite outcomes of the same source test cannot form one finding.
 `ForwardingStep.conditions` and `ForwardingFinding.conditions` expose these
 requirements. Empty conditions preserve ordinary structural behavior.
 
+For constructor calls, the optional `conditional_constructor_signature` fact
+has `scope="signature_only"`. Scan validates its original unconfirmed binding,
+source hashes, call evidence, preceding type checks and required
+`source_constructor_lookup` predicate. It can compare an expansion against a
+fixed signature and retains that predicate on the finding. It cannot propagate
+into a variadic constructor body. Assess does not request this conditional mode.
+
 These records establish a conditional source path, not effect completeness,
 feasibility or runtime dispatch. Unknown class/call effects remain boundaries.
 The ordinary classmethod and constructor proof readers reject this query mode;

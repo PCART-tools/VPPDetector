@@ -574,6 +574,88 @@ def conditional_source_binding(analysis: Any, call: Any) -> Optional[dict]:
     return fact
 
 
+def conditional_constructor_signature(analysis: Any, call: Any) -> Optional[dict]:
+    """Read a conditional signature reference; it never authorizes body execution."""
+    facts = getattr(call, 'conditional_source_bindings', ())
+    ordinary = getattr(call, 'constructor_bindings', ())
+    if (analysis.inputs.get('conditional_source_state') is not True
+            or call.target_status != 'constructor' or call.target is None
+            or call.binding_status == 'invalid'
+            or not isinstance(facts, (list, tuple)) or len(facts) != 1
+            or not isinstance(ordinary, (list, tuple)) or len(ordinary) != 1):
+        return None
+    fact, binding = facts[0], ordinary[0]
+    if not isinstance(fact, dict) or not isinstance(binding, dict):
+        return None
+    target, receiver = fact.get('target'), fact.get('receiver_class')
+    conditions, assumptions = fact.get('conditions'), fact.get('assumptions')
+    issues, evidence = fact.get('unconfirmed_binding_issues'), fact.get('call_evidence')
+    required = {'source_snapshot_bindings_hold', 'builtin_type_call_and_new_binding',
+                'no_external_monkeypatch_or_import_hook', 'no_unmodeled_indirect_class_mutation'}
+    if (fact.get('kind') != 'conditional_constructor_signature'
+            or fact.get('status') != 'required' or fact.get('scope') != 'signature_only'
+            or fact.get('runtime_target_confirmed') is not False
+            or fact.get('feasibility') != 'not_proven' or fact.get('call_id') != call.id
+            or not isinstance(target, dict) or target != binding.get('target')
+            or identity_from_target(target) != identity_from_target(call.target)
+            or not isinstance(receiver, dict) or receiver != binding.get('receiver_class')
+            or binding.get('status') != 'unconfirmed' or binding.get('phase') != '__init__'
+            or not call.target.qualname.endswith('.__init__')
+            or not isinstance(issues, (list, tuple)) or not issues
+            or issues != binding.get('issues')
+            or any(not isinstance(issue, dict) or issue.get('reason') not in (
+                'constructor_class_origin_unconfirmed', 'constructor_namespace_unconfirmed',
+                'constructor_definition_evaluation_unconfirmed') for issue in issues)
+            or not isinstance(assumptions, (list, tuple))
+            or not all(isinstance(value, str) for value in assumptions)
+            or not required.issubset(assumptions) or assumptions != binding.get('assumptions')
+            or not fact.get('source_hashes')
+            or fact['source_hashes'] != analysis.inputs.get('sha256')
+            or target.get('file_path') not in fact['source_hashes']
+            or receiver.get('file_path') not in fact['source_hashes']
+            or not isinstance(evidence, dict) or evidence.get('file_path') != call.caller.file_path
+            or _location(evidence) != (call.lineno, call.col_offset,
+                                       call.end_lineno, call.end_col_offset)
+            or not isinstance(conditions, (list, tuple)) or not 1 <= len(conditions) <= 128
+            or any(not isinstance(condition, dict) for condition in conditions)
+            or conditions != getattr(call, 'conditions', ())):
+        return None
+    predicates = [c for c in conditions if c.get('kind') == 'source_constructor_lookup']
+    if len(predicates) != 1:
+        return None
+    predicate = predicates[0]
+    probes = predicate.get('preceding_type_checks')
+    if (predicate.get('status') != 'required' or predicate.get('scope') != 'signature_only'
+            or predicate.get('runtime_confirmed') is not False
+            or predicate.get('feasibility') != 'not_proven'
+            or predicate.get('target') != target or predicate.get('receiver_class') != receiver
+            or not isinstance(probes, (list, tuple)) or not 1 <= len(probes) <= 128
+            or not all(isinstance(probe, str) for probe in probes)
+            or not consistent_conditions(conditions)):
+        return None
+    for probe_id in probes:
+        matching = [prior for prior in analysis.calls if prior.id == probe_id]
+        if len(matching) != 1:
+            return None
+        prior = matching[0]
+        if (prior.caller != call.caller or prior.callee_name != 'isinstance'
+                or prior.target_status != 'builtin_boundary' or prior.target is not None
+                or (prior.lineno, prior.col_offset) >= (call.lineno, call.col_offset)
+                or not any(arg.get('argument') == {'position': 1}
+                           and any(v.get('class_type') == receiver for v in arg.get('sources', ()))
+                           for arg in prior.argument_sources)):
+            return None
+    if (not any(b.get('reason') == 'conditional_constructor_signature'
+                and b.get('call_id') == call.id and b.get('boundary_kind') == 'required_condition'
+                and b.get('condition') == predicate for b in analysis.boundaries)
+            or any(not isinstance(item, dict) or item.get('target') != target
+                   or item.get('conditional_source_bindings') != facts
+                   or item.get('constructor_bindings') != ordinary
+                   for item in getattr(call, 'analysis_contexts', ()))):
+        return None
+    return fact
+
+
 def consistent_conditions(conditions) -> bool:
     """Reject opposite outcomes of the same recorded source test."""
     seen = {}
