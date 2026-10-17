@@ -57,6 +57,7 @@ from ._program_facts import (
 from ._program_facts import (
     target_status as _target_status,
 )
+from ._static_attribute_retention import retained_store as static_retained_store
 from .models import (
     AnalysisBoundary,
     CallContext,
@@ -666,6 +667,19 @@ class _Frame:
                 )
                 for target in targets:
                     if not isinstance(target, ast.Name):
+                        if isinstance(result, _Value) and _tracked(result):
+                            retention = static_retained_store(
+                                self.analysis, self.function, statement, target
+                            )
+                            if retention is not None:
+                                self.proof.handled(
+                                    self.function, "retained_instance_attribute",
+                                    "PCResolve proves an ordinary fresh-instance store of the "
+                                    "selected value, without later overwrite or receiver escape "
+                                    "before normal constructor return. "
+                                    + "; ".join(retention["assumptions"]), statement,
+                                )
+                                continue
                         root = target
                         while isinstance(root, (ast.Attribute, ast.Subscript)):
                             root = root.value
