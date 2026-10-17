@@ -42,6 +42,7 @@ from ._program_facts import (
     direct_calls,
     identity_from_target,
     immediate_body,
+    mapping_protocol,
     scalar_truth_protocol,
     source_classmethod_binding,
 )
@@ -956,6 +957,22 @@ class _Frame:
                     )
                 return _Value(tracked=tracked)
             if isinstance(receiver, _Keywords):
+                if node.func.attr == 'clear':
+                    if (not facts or receiver.source_state
+                            or not mapping_protocol(self.function, self.analysis, facts, 'clear')):
+                        self.unknown('mapping_effect_unproven', node)
+                    receiver.items.clear()
+                    return _Value(None)
+                if node.func.attr == 'get':
+                    positional, keywords = self.arguments(node)
+                    key = (positional[0].literal
+                           if positional and isinstance(positional[0], _Value) else _UNKNOWN)
+                    if (not facts or len(positional) not in (1, 2) or keywords
+                            or type(key) is not str or not mapping_protocol(
+                                self.function, self.analysis, facts, 'get', key)):
+                        self.unknown('mapping_effect_unproven', node)
+                    return receiver.items.get(key, positional[1] if len(positional) == 2
+                                              else _Value(None))
                 if node.func.attr == "copy" and facts:
                     if (
                         facts.target_status == "local_container_protocol"

@@ -32,6 +32,14 @@ complete mapping contents or a selected-argument handling proof.
 
 ## Current capability matrix
 
+Assessment consumes exact `container_clear` effects and named-key `get`
+projection facts from `local_container_protocol` calls. The reader matches the
+indexed call syntax, completion/binding, receiver objects, source evidence and
+incoming effect/result contexts. Clearing mutates the current mapping object;
+aliases share that object while proven shallow copies retain independent
+contents. A `get` result is consumed only when downstream use requires its
+value. Missing/conflicting facts and unknown receiver effects remain unknown.
+
 “Available” means that a representation exists. “Partial” means that only the
 bounded source forms described by PCResolve are supported. No row promises
 complete Python semantics.

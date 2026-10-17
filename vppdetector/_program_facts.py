@@ -213,6 +213,76 @@ def copy_protocol_target(owner, analysis, call, value) -> Optional[FunctionIdent
     return None
 
 
+def mapping_protocol(owner, analysis, call, operation, key=None) -> bool:
+    """Validate existing whole-mapping clear or named-key get producer facts."""
+    if (operation not in ('clear', 'get')
+            or analysis.inputs.get('conditional_source_state')
+            or call.target_status != 'local_container_protocol'
+            or call.analysis_status != 'analyzed' or call.target or call.target_candidates
+            or not CallFacts(analysis, call).complete_binding
+            or identity_from_target(call.caller) != owner.identity
+            or str(owner.identity.file_path) not in analysis.inputs.get('sha256', {})
+            or not call.receiver_sources
+            or any(not isinstance(value, dict) for value in call.receiver_sources)
+            or any(not isinstance(value, dict) for value in call.result_sources + call.effects)
+            or any(not isinstance(value.get('kind'), str)
+                   or not isinstance(value.get('source'), str)
+                   for value in call.receiver_sources)
+            or any(value.get(flag) for value in call.receiver_sources for flag in (
+                'value_incomplete', 'import_incomplete', 'import_modified', 'projection'))
+            or any(b.get('call_id') == call.id and b.get('reason') not in {'depth_limit'}
+                   for b in analysis.boundaries)
+            or any(not isinstance(item, dict)
+                   or any(item.get(field) != getattr(call, field) for field in (
+                       'effects', 'result_sources', 'binding_status', 'target_status'))
+                   for item in getattr(call, 'analysis_contexts', ()))):
+        return False
+    location = (call.lineno, call.col_offset, call.end_lineno, call.end_col_offset)
+    nodes = [node for node in ast.walk(owner.node)
+             if isinstance(node, ast.Call) and _node_location(node) == location]
+    if len(nodes) != 1:
+        return False
+    node = nodes[0]
+    if (not isinstance(node.func, ast.Attribute) or node.func.attr != operation
+            or ast.unparse(node.func) != call.callee_name or node.keywords):
+        return False
+
+    def witness(evidence):
+        parsed = _expression(evidence.get('source_text')) if isinstance(evidence, dict) else None
+        return (isinstance(parsed, ast.Call) and ast.dump(parsed) == ast.dump(node)
+                and evidence.get('file_path') == call.caller.file_path
+                and _location(evidence) == location)
+
+    if operation == 'clear':
+        if node.args or len(call.effects) != 1 or call.result_sources:
+            return False
+        effect = call.effects[0]
+        objects = [value['container_object'].get('source') for value in call.receiver_sources
+                   if isinstance(value.get('container_object'), dict)]
+        if not objects:
+            objects = ['$parameter:{}:{}:{}'.format(call.caller.file_path,
+                       call.caller.qualname, value['source']) for value in call.receiver_sources
+                       if value.get('kind') == 'parameter' and value.get('source')
+                       and value.get('output_path') == ['*']]
+        return (effect.get('kind') == 'container_clear' and effect.get('operation') == 'clear'
+                and effect.get('status') == 'exact' and effect.get('completion') == 'normal_return'
+                and effect.get('element_path') == [] and bool(objects)
+                and effect.get('object_sources') == list(dict.fromkeys(objects))
+                and isinstance(effect.get('conditions'), (list, tuple))
+                and consistent_conditions(effect['conditions']) and witness(effect.get('evidence')))
+    if (len(node.args) not in (1, 2) or not isinstance(node.args[0], ast.Constant)
+            or type(node.args[0].value) is not str or node.args[0].value != key or call.effects):
+        return False
+    receivers = {(value.get('kind'), value.get('source')) for value in call.receiver_sources}
+    return any(isinstance(value.get('kind'), str) and isinstance(value.get('source'), str)
+               and value.get('projection') == [key]
+               and (value.get('kind'), value.get('source')) in receivers
+               and not value.get('value_incomplete')
+               and isinstance(value.get('evidence'), (list, tuple))
+               and any(witness(evidence) for evidence in value['evidence'])
+               for value in call.result_sources)
+
+
 def _constant_truth(node, depth=0):
     if depth > 16:
         return None
