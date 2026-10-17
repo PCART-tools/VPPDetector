@@ -389,6 +389,8 @@ def build_source_index(
     """
     from pcresolve.import_facts import import_facts, resolve_relative_module
     from pcresolve.scope_facts import statement_scope_facts
+    from pcresolve.star_imports import static_star_imports
+    from pcresolve.source_syntax import parse_python_source
 
     root = source.package_root.resolve()
     if not root.exists():
@@ -413,6 +415,7 @@ def build_source_index(
     classes: List[FunctionIdentity] = []
     boundaries: List[AnalysisBoundary] = []
     imports = {}
+    module_bodies = {}
     condition_nodes = {}
 
     while pending:
@@ -422,7 +425,7 @@ def build_source_index(
         visited.add(file_path)
         try:
             with tokenize.open(file_path) as stream:
-                tree = ast.parse(stream.read(), filename=str(file_path))
+                tree = parse_python_source(stream.read(), filename=str(file_path))
         except (OSError, SyntaxError, UnicodeError) as exc:
             boundaries.append(
                 AnalysisBoundary(
@@ -432,6 +435,7 @@ def build_source_index(
             )
             continue
         module = module_name_for_path(file_path, import_roots)
+        module_bodies.setdefault(module, []).append((str(file_path), tree.body))
         if is_api_scope:
             for node in ast.walk(tree):
                 for fact in import_facts(node):
@@ -491,6 +495,10 @@ def build_source_index(
         constructors.extend(collector.constructors)
         classes.extend(collector.classes)
         condition_nodes[file_path] = tuple(collector.conditions)
+
+    star_facts = static_star_imports(module_bodies)
+    for module, aliases in star_facts.aliases.items():
+        imports[module].update(aliases)
 
     return SourceIndex(
         source=normalized_source,
