@@ -33,6 +33,7 @@ from ._analysis_context import (
 )
 from ._fact_adapter import ResolutionError
 from ._mapping_key_access import closed_keys as closed_mapping_keys
+from ._normal_returns import mapping_return as observed_mapping_return
 from ._observed_checks import keyword_check as observed_keyword_check
 from ._program_facts import (
     CallFacts,
@@ -1696,6 +1697,18 @@ def assess_change(
             elif not (receiver_name and name.startswith(receiver_name + ".")):
                 proof.unknown(entry, "unsupported_call_fact", f"No supported binding for {name}.")
         proof.note(entry, "entry_binding", f"{change.old_name} captured by {destination}.")
+        if call.observed_normal_returns:
+            transfer = observed_mapping_return(context, entry, call, change, original.literal)
+            if transfer is None:
+                proof.unknown(entry, 'observed_normal_return_unconfirmed',
+                              'The normal-return observation and source retention fact disagree.')
+            proof.note(entry, 'runtime_normal_return',
+                       'Caller observed normal completion of this original call with the same '
+                       'captured primitive. PCResolve proves that the selected key survives '
+                       'the update in the returned fresh mapping. Assumes standard builtin dict '
+                       'and no external frame introspection.',
+                       node=call.observed_normal_returns[0].return_span)
+            raise _Stop(ParameterState.HANDLED, 'observed_mapping_return_consumption')
         if call.observed_keyword_checks:
             observation = observed_keyword_check(context, entry, call, change, original.literal)
             if observation is None:

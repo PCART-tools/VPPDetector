@@ -119,6 +119,24 @@ class ObservedKeywordCheck:
 
 
 @dataclass(frozen=True)
+class ObservedNormalReturn:
+    """Trusted original-call completion with the same captured primitive value.
+
+    The actual source frame received keyword/value and returned an exact builtin
+    dict normally at return_span. This attestation alone proves no consumption;
+    a matching PCResolve retention fact is additionally required.
+    """
+
+    entry: FunctionIdentity
+    call_text: str
+    keyword: str
+    value: object
+    return_span: SourceSpan
+    returned_builtin_dict: bool
+    source_hashes: Tuple[Tuple[Path, str], ...]
+
+
+@dataclass(frozen=True)
 class CallContext:
     """Original call and optional trusted, finite facts for that call only.
 
@@ -131,6 +149,8 @@ class CallContext:
     known_conditions supplies independently established predicate outcomes at
     exact source spans. observed_keyword_checks supplies an explicit original
     call trace checkpoint; these runtime facts never enter scan/producer caches.
+    observed_normal_returns confirms original-call completion for a matching
+    conditional source retention proof; completion alone never implies handling.
     """
 
     expression: Union[str, ast.Call]
@@ -140,6 +160,7 @@ class CallContext:
     known_targets: Tuple[Tuple[SourceSpan, FunctionIdentity], ...] = ()
     known_conditions: Tuple[Tuple[SourceSpan, bool], ...] = ()
     observed_keyword_checks: Tuple[ObservedKeywordCheck, ...] = ()
+    observed_normal_returns: Tuple[ObservedNormalReturn, ...] = ()
 
     def __post_init__(self) -> None:
         if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
@@ -166,6 +187,12 @@ class CallContext:
                 or any(not isinstance(value, ObservedKeywordCheck)
                        for value in self.observed_keyword_checks)):
             raise ValueError('observed_keyword_checks requires bounded observation records')
+        if (len(self.observed_normal_returns) > 8
+                or any(not isinstance(value, ObservedNormalReturn)
+                       for value in self.observed_normal_returns)):
+            raise ValueError('observed_normal_returns requires bounded observation records')
+        if self.observed_normal_returns and self.observed_keyword_checks:
+            raise ValueError('Normal-return and uncaught-rejection observations conflict')
 
 
 @dataclass(frozen=True)

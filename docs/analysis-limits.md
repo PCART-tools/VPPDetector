@@ -368,6 +368,19 @@ entry binding and source snapshot checks still apply. Scan is unchanged.
 
 ### Supplied call facts
 
+`CallContext.observed_normal_returns` accepts bounded `ObservedNormalReturn`
+attestations that the original call reached the identified source frame with the
+same captured primitive and returned an exact builtin dictionary normally at the
+recorded source span. The consumer additionally requires PCResolve's conditional
+`mapping_return_transfers` fact: an update into a fresh dictionary, a matching
+return path and no later access to the selected key's field. Whole-map escape,
+rebinding, unknown paths and overwritten fields prevent this retention proof.
+The call text, source hashes, parameter, return location and producer witnesses
+must agree. Missing or conflicting evidence keeps UNKNOWN. This combines static
+retention with independent completion evidence; it is an observation-assisted
+HANDLED result, and never a compatibility verdict. VPPDetector does not run the
+client or collect/authenticate these trusted caller observations. Scan is unchanged.
+
 `CallContext.known_conditions` accepts trusted Boolean predicate outcomes at
 exact source spans. It applies only to conditions independent of the selected
 argument and cannot override a contradicting computed outcome. The supplied

@@ -295,6 +295,12 @@ of each result.
 - `known_targets`: exact library `SourceSpan` locations paired with confirmed
   `FunctionIdentity` implementations.
 - `callsite`: optional location of the original call.
+- `observed_normal_returns`: bounded `ObservedNormalReturn` attestations for an
+  actual source-frame entry and normal dictionary return of the same original
+  call. The record includes the selected primitive, exact return span and source
+  hashes. HANDLED additionally requires a matching PCResolve fresh-mapping
+  retention proof; an observation alone is insufficient. These facts are trusted
+  caller input and are reported as observation-assisted evidence.
 
 Known values accept `str`, `bytes`, `int`, `float`, `bool` and `None`;
 `None` is distinct from an unknown value. Names and known-target locations
