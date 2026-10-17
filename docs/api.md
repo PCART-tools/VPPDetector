@@ -315,6 +315,15 @@ of each result.
   attribute state. A matching PCResolve constructor-store obligation is also
   required; the caller independently confirms construction and attribute
   protocols, original receiver identity, completed store and final retention.
+- `observed_capture_rejections`: bounded `ObservedCaptureRejection` records for
+  an actual nonempty-dictionary rejection guard. The selected original primitive,
+  exact builtin dictionary type, completed true guard and escaping exception
+  must be independently confirmed and match a PCResolve source obligation.
+- `observed_fixed_bindings`: bounded `ObservedFixedBinding` records for the
+  original captured primitive reaching a fixed formal of an actual bound
+  method through one source `**mapping` call. The original call must complete
+  normally. Assess validates PCResolve's source call and target parameters,
+  the exact call scope, mapping expansion, method binding and source hashes.
 
 Known values accept `str`, `bytes`, `int`, `float`, `bool` and `None`;
 `None` is distinct from an unknown value. Names and known-target locations

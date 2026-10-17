@@ -377,6 +377,38 @@ entry binding and source snapshot checks still apply. Scan is unchanged.
 
 ### Supplied call facts
 
+`CallContext.observed_fixed_bindings` confirms consumption by an actual fixed
+method parameter when runtime factory/dispatch choices are otherwise unresolved.
+The caller independently confirms that this original invocation's selected
+primitive reaches the recorded exact builtin mapping, that one source call
+expands it into the actual bound method, that the method frame enters with this
+same primitive in its fixed formal, and that the original invocation completes
+normally, including all constructor phases when applicable. Assess matches the
+original call/entry, key/value, source caller and call span, expansion variable,
+target method, fixed keyword-capable parameter and source hashes. PCResolve's
+neutral call record and target parameter summary must match source AST and
+snapshot. Only an undecorated bound method reached by one `**name` expansion is
+covered. Missing/conflicting evidence keeps `unknown`. This observation-assisted
+`handled` result records fixed binding acceptance; it is not a general factory,
+heap, compatibility or later-body-consumption proof. It describes the observed
+invocation, so another invocation with a reused factory cache needs its own
+evidence. VPPDetector does not collect/authenticate these observations or alter
+scan/source caches; only one observation family is accepted per assessment.
+
+`CallContext.observed_capture_rejections` supports source guards that reject
+a nonempty dictionary directly or as the final operand of a completed `and`
+condition. The caller confirms the actual checker dictionary contains the
+selected original primitive, exact builtin type, true guard completion and the
+same uncaught exception at the recorded raise. Assess requires a matching
+PCResolve `capture_rejection_guards` obligation and verifies source structure,
+entry, original call, key/value, parameter, guard/raise spans, builtin exception
+kind and source hashes. Only direct `TypeError`/`ValueError` raises with constant
+messages are supported. Missing/conflicting evidence keeps `unknown`.
+This is observation-assisted rejection of the captured key; it proves neither
+unassisted path feasibility nor that removing the key repairs the full client.
+Observation families cannot be mixed; observations are trusted caller input
+and do not affect scan or source caches.
+
 `CallContext.observed_attribute_retentions` can establish observation-assisted
 `handled` when an original constructor capture survives in the returned
 instance's ordinary attribute state. The caller must independently confirm

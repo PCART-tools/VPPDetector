@@ -32,8 +32,10 @@ from ._analysis_context import (
     validate_depth as _validate_depth,
 )
 from ._attribute_retention import attribute_retention as observed_attribute_retention
+from ._capture_rejection import capture_rejection as observed_capture_rejection
 from ._container_predicates import container_predicate as observed_container_predicate
 from ._fact_adapter import ResolutionError
+from ._fixed_binding import fixed_binding as observed_fixed_binding
 from ._mapping_key_access import closed_keys as closed_mapping_keys
 from ._normal_returns import mapping_return as observed_mapping_return
 from ._observed_checks import keyword_check as observed_keyword_check
@@ -1706,6 +1708,35 @@ def assess_change(
             elif not (receiver_name and name.startswith(receiver_name + ".")):
                 proof.unknown(entry, "unsupported_call_fact", f"No supported binding for {name}.")
         proof.note(entry, "entry_binding", f"{change.old_name} captured by {destination}.")
+        if call.observed_fixed_bindings:
+            target = observed_fixed_binding(context, entry, call, change, original.literal)
+            if target is None:
+                proof.unknown(entry, 'observed_fixed_binding_unconfirmed',
+                              'Original-element provenance, actual fixed binding, normal '
+                              'completion or source call/signature evidence is unconfirmed.')
+            observed = call.observed_fixed_bindings[0]
+            proof.note(context.index.find(observed.caller), 'runtime_fixed_parameter_binding',
+                       'Caller independently traced the original captured primitive through '
+                       'this exact builtin mapping expansion into the actual bound method\'s '
+                       'fixed formal, and confirmed normal completion of the original call. '
+                       'PCResolve supplies the source call and target parameters.',
+                       node=observed.call_span, target=target.identity)
+            raise _Stop(ParameterState.HANDLED, 'observed_fixed_parameter_binding')
+        if call.observed_capture_rejections:
+            guard = observed_capture_rejection(context, entry, call, change, original.literal)
+            if guard is None:
+                proof.unknown(entry, 'observed_capture_rejection_unconfirmed',
+                              'Original-key provenance, dictionary type, reached source guard '
+                              'or escaping exception is missing or conflicting.')
+            observed = call.observed_capture_rejections[0]
+            proof.note(context.index.find(observed.checker), 'runtime_capture_rejection',
+                       'Caller traced this original captured primitive into an exact builtin '
+                       'dictionary and confirmed the source nonempty-dictionary rejection '
+                       'guard completed and its exception escaped the original call.',
+                       node=observed.raise_span, target=observed.checker)
+            proof.reject(entry, 'observed_capture_guard_rejection',
+                         change.old_name + ' reaches the observed dictionary rejection guard.',
+                         target=observed.checker)
         if call.observed_attribute_retentions:
             transfer = observed_attribute_retention(context, entry, call, change, original.literal)
             if transfer is None:

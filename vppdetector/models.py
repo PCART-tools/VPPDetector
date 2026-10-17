@@ -120,6 +120,59 @@ class ObservedKeywordCheck:
 
 
 @dataclass(frozen=True)
+class ObservedFixedBinding:
+    """Trusted original-call element provenance into an actual fixed method formal.
+
+    A traced source call expanded this exact builtin mapping into the identified
+    bound method, which actually entered with the same original primitive in the
+    fixed parameter. The original invocation completed normally. This records
+    binding consumption, not a general dispatch or compatibility proof.
+    """
+
+    entry: FunctionIdentity
+    call_text: str
+    keyword: str
+    value: object
+    caller: FunctionIdentity
+    call_span: SourceSpan
+    target: FunctionIdentity
+    parameter: str
+    mapping_variable: str
+    target_bound_receiver: bool
+    received_builtin_dict: bool
+    origin_confirmed: bool
+    target_entered: bool
+    completed_normally: bool
+    source_hashes: Tuple[Tuple[Path, str], ...]
+
+
+@dataclass(frozen=True)
+class ObservedCaptureRejection:
+    """Trusted original-call rejection by a source nonempty-dictionary guard.
+
+    The checker received the selected original primitive in an exact builtin
+    dictionary, completed the whole guard with a true outcome and raised the
+    uncaught exception at the recorded source statement.
+    """
+
+    entry: FunctionIdentity
+    call_text: str
+    keyword: str
+    value: object
+    checker: FunctionIdentity
+    guard_span: SourceSpan
+    raise_span: SourceSpan
+    mapping_parameter: str
+    exception: str
+    received_builtin_dict: bool
+    origin_confirmed: bool
+    guard_value: bool
+    guard_completed: bool
+    uncaught: bool
+    source_hashes: Tuple[Tuple[Path, str], ...]
+
+
+@dataclass(frozen=True)
 class ObservedAttributeRetention:
     """Trusted completed class construction retaining the original keyword capture.
 
@@ -215,6 +268,8 @@ class CallContext:
     observed_normal_returns: Tuple[ObservedNormalReturn, ...] = ()
     observed_container_predicates: Tuple[ObservedContainerPredicate, ...] = ()
     observed_attribute_retentions: Tuple[ObservedAttributeRetention, ...] = ()
+    observed_capture_rejections: Tuple[ObservedCaptureRejection, ...] = ()
+    observed_fixed_bindings: Tuple[ObservedFixedBinding, ...] = ()
 
     def __post_init__(self) -> None:
         if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
@@ -237,29 +292,21 @@ class CallContext:
                 for span, value in self.known_conditions)
                 or len(set(conditions)) != len(conditions)):
             raise ValueError('known_conditions requires unique source spans and bool outcomes')
-        if (len(self.observed_keyword_checks) > 8
-                or any(not isinstance(value, ObservedKeywordCheck)
-                       for value in self.observed_keyword_checks)):
-            raise ValueError('observed_keyword_checks requires bounded observation records')
-        if (len(self.observed_normal_returns) > 8
-                or any(not isinstance(value, ObservedNormalReturn)
-                       for value in self.observed_normal_returns)):
-            raise ValueError('observed_normal_returns requires bounded observation records')
-        if self.observed_normal_returns and self.observed_keyword_checks:
-            raise ValueError('Normal-return and uncaught-rejection observations conflict')
-        if (len(self.observed_container_predicates) > 8 or any(
-                not isinstance(value, ObservedContainerPredicate)
-                for value in self.observed_container_predicates)):
-            raise ValueError('observed_container_predicates requires bounded observation records')
-        if self.observed_container_predicates and (
-                self.observed_normal_returns or self.observed_keyword_checks):
-            raise ValueError('Supply one observation family for an assessment')
-        if (len(self.observed_attribute_retentions) > 8 or any(
-                not isinstance(value, ObservedAttributeRetention)
-                for value in self.observed_attribute_retentions)):
-            raise ValueError('observed_attribute_retentions requires bounded observation records')
-        if self.observed_attribute_retentions and (self.observed_container_predicates
-                or self.observed_normal_returns or self.observed_keyword_checks):
+        observation_types = (
+            ('observed_keyword_checks', ObservedKeywordCheck),
+            ('observed_normal_returns', ObservedNormalReturn),
+            ('observed_container_predicates', ObservedContainerPredicate),
+            ('observed_attribute_retentions', ObservedAttributeRetention),
+            ('observed_capture_rejections', ObservedCaptureRejection),
+            ('observed_fixed_bindings', ObservedFixedBinding),
+        )
+        present = 0
+        for name, record_type in observation_types:
+            records = getattr(self, name)
+            if len(records) > 8 or any(not isinstance(value, record_type) for value in records):
+                raise ValueError(name + ' requires bounded observation records')
+            present += bool(records)
+        if present > 1:
             raise ValueError('Supply one observation family for an assessment')
 
 
