@@ -331,6 +331,22 @@ protocols are not admitted. These supporting data effects cannot override a
 remaining unresolved helper call, even when its arguments are documentation
 strings; no decorator or document-processing library name is a transparency rule.
 
+Finite `str.split` and restricted `str.format` records are accepted only inside
+that same complete source decoration proof. The consumer validates their string
+operand shapes, normal-completion scope and explicit field/separator restrictions.
+This permits source-proved documentation factories without executing them.
+Independent entry-body control flow remains subject to ordinary assessment rules.
+
+An assertion whose finite test is definitely true and independent of the selected
+argument can retain its continuation without evaluating its error message. This
+continuation is the same with assertions enabled or disabled. False, unknown or
+selected-argument-dependent assertion execution stays unresolved; it does not
+establish a rejection. Equality with an empty known builtin keyword dictionary
+can be decided without comparing payloads. A finite `and`/`or` tree of local
+`is None` / `is not None` probes can also join unknown identity outcomes when all
+outcomes give the same final Boolean. Calls, attributes, custom truth protocols
+and other comparisons do not acquire this branch proof.
+
 Finite guards support `isinstance()` against unshadowed built-in `str`, `bytes`,
 `int`, `float`, `bool` and `object` types, and `startswith()` / `endswith()` on
 known strings with one known string argument. Unknown values, shadowed built-ins

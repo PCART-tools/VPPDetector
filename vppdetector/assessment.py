@@ -434,6 +434,21 @@ class _Proof:
                         or effect.get('completion') != 'normal_return'
                         or 'standard_library_text_protocols_hold' not in fact['assumptions']):
                     return False
+            elif target in ('str.split', 'str.format'):
+                shapes = effect.get('argument_shapes')
+                if (kind != ('builtin_call', 'data_only')
+                        or effect.get('protocol') != 'finite_builtin_text'
+                        or effect.get('receiver_shape') != 'str'
+                        or effect.get('completion') != 'normal_return'
+                        or not isinstance(shapes, list)
+                        or any(shape != ['str'] for shape in shapes)
+                        or target == 'str.split' and (
+                            shapes != [['str']] or effect.get('output_shape') != 'list_of_str'
+                            or effect.get('restriction') != 'explicit_nonempty_separator')
+                        or target == 'str.format' and (
+                            effect.get('output_shape') != 'str'
+                            or effect.get('restriction') != 'no_attribute_or_item_fields')):
+                    return False
             elif target == "str.join":
                 if (
                     kind != ("builtin_call", "data_only")
@@ -648,6 +663,35 @@ class _Frame:
             for facts in (statement_scope_facts(scope.body),)
         )
 
+    def finite_identity_truth(self, node, depth=0):
+        """Join only pure local identity probes, without reading custom truth values."""
+        if depth > 8:
+            return None
+        if isinstance(node, ast.BoolOp) and len(node.values) <= 8:
+            possibilities = {isinstance(node.op, ast.And)}
+            for child in node.values:
+                incoming = self.finite_identity_truth(child, depth + 1)
+                if incoming is None:
+                    return None
+                possibilities = {
+                    (left and right if isinstance(node.op, ast.And) else left or right)
+                    for left in possibilities for right in incoming
+                }
+            return possibilities
+        if (not isinstance(node, ast.Compare) or len(node.ops) != 1
+                or not isinstance(node.ops[0], (ast.Is, ast.IsNot))
+                or not isinstance(node.left, ast.Name)
+                or not isinstance(node.comparators[0], ast.Constant)
+                or node.comparators[0].value is not None):
+            return None
+        value = self.values.get(node.left.id)
+        if not isinstance(value, _Value):
+            return None
+        if value.literal is _UNKNOWN:
+            return {False, True}
+        equal = value.literal is None
+        return {equal if isinstance(node.ops[0], ast.Is) else not equal}
+
     def statements(self, statements):
         for statement in statements:
             if self.returned:
@@ -762,6 +806,15 @@ class _Frame:
                     self.statements(statement.body if truth else statement.orelse)
                 finally:
                     self.rejection_guard = previous
+            elif isinstance(statement, ast.Assert):
+                condition = self.expression(statement.test)
+                if self.truth(condition) is not True or _tracked(condition):
+                    self.unknown('assertion_execution_unconfirmed', statement)
+                # A proved true, unrelated test has the same continuation with
+                # assertions enabled or disabled. Its message is never evaluated.
+                self.proof.note(self.function, 'static_assertion_continuation',
+                                'The assertion test is statically true; its message is skipped.',
+                                statement.test)
             elif isinstance(statement, ast.Raise):
                 call = statement.exc
                 if (
@@ -951,6 +1004,11 @@ class _Frame:
                 key_presence = key_presence or _key_presence(value)
                 truth = self.truth(value)
                 if truth is None:
+                    joined = self.finite_identity_truth(node)
+                    if joined is not None and len(joined) == 1:
+                        # The final boolean is independent of every unknown
+                        # operand; only builtin identity tests were inspected.
+                        return _Value(next(iter(joined)))
                     return _Value(tracked=tracked)
                 if truth == isinstance(node.op, ast.Or):
                     return _Value(truth, tracked)
@@ -961,6 +1019,15 @@ class _Frame:
             lval = left.literal if isinstance(left, _Value) else _UNKNOWN
             rval = right.literal if isinstance(right, _Value) else _UNKNOWN
             operation = node.ops[0]
+            if (isinstance(operation, (ast.Eq, ast.NotEq))
+                    and isinstance(left, _Keywords) and isinstance(right, _Keywords)
+                    and (not left.items or not right.items)):
+                # Comparing to an empty builtin dict cannot invoke payload
+                # equality. Both mappings retain finite, exact string keys.
+                equal = not left.items and not right.items
+                selected = _tracked(left) or _tracked(right)
+                return _Value(equal if isinstance(operation, ast.Eq) else not equal,
+                              selected, selected)
             if isinstance(operation, (ast.In, ast.NotIn)) and isinstance(right, _Keywords):
                 if lval is not _UNKNOWN:
                     present = lval in right.items
