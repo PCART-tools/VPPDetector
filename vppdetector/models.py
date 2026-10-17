@@ -33,6 +33,7 @@ class ParameterState(StringEnum):
     REJECTED = "rejected"
     IGNORED = "ignored"
     UNKNOWN = "unknown"
+    NOT_ENTERED = "not_entered"
 
 
 class ScanCoverageStatus(StringEnum):

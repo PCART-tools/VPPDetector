@@ -325,6 +325,13 @@ class _Proof:
                         node,
                         function.identity,
                     )
+            if (change is not None and caller is None and node is None
+                    and not function.node.decorator_list):
+                self.note(function, 'entry_binding_failed',
+                          'The original call cannot enter this source implementation: '
+                          + str(exc) + '. This does not reject the selected argument '
+                          'or authorize its deletion.')
+                raise _Stop(ParameterState.NOT_ENTERED, 'entry_binding_failed')
             self.unknown(owner, "call_binding_unproven", str(exc), node)
         binding.apply_defaults()
         values = dict(binding.arguments)

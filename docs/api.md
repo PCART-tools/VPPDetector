@@ -263,7 +263,8 @@ Assessment can run directly, without a structural scan first.
 `ParameterAssessment` retains `target_api`, `resolved_api`, `change`, the
 normalized original `call_text` and an optional `callsite`. Its `state` is a
 `ParameterState` enum with serialized values `handled`, `rejected`, `ignored`
-and `unknown`. `reason` explains the outcome; `evidence` records supporting
+and `unknown`, plus `not_entered` for an unrelated, proved entry binding failure.
+`reason` explains the outcome; `evidence` records supporting
 bindings, uses and paths, and `boundaries` records analysis limits.
 
 Evidence with reason `normal_path_precondition` retains a condition required

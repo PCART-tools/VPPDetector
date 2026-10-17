@@ -237,6 +237,7 @@ call conditions and any recorded normal-path preconditions.
 | `HANDLED` | The argument's value or presence is used, or its value binds to a downstream explicit parameter. |
 | `REJECTED` | Supported conditions lead to a parameter-specific binding rejection or an explicit captured-key rejection. |
 | `IGNORED` | Supported executed paths do not use the argument's value or presence. |
+| `NOT_ENTERED` | An unrelated binding error in the original call prevents entry into the requested source implementation. The selected argument receives no use/rejection verdict. |
 | `UNKNOWN` | Binding, control flow, dispatch or effects prevent a definite result. |
 
 These are argument-handling states. Behavioral equivalence between library
@@ -244,6 +245,13 @@ versions and code modification are outside this analysis. In particular,
 unused arguments and unresolved analysis do not establish that a deletion or
 rename is safe, and rejection evidence does not establish that a proposed
 modification succeeds.
+
+`NOT_ENTERED` applies only to a proved entry-signature failure of an undecorated
+implementation, after parameter-specific rejection checks. It does not apply to
+unresolved expansions, uncertain decorator binding, or a later callee failure.
+It records `entry_binding_failed` evidence and never permits deleting the selected
+argument. The distinction lets callers report a definite invalid original call
+without treating it as either successful parameter handling or analysis unknown.
 
 A supported, completed value/presence consumption can remain positive handling
 evidence across a later unsupported mapping effect or call, only after no raw
