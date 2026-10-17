@@ -32,6 +32,7 @@ from ._analysis_context import (
     validate_depth as _validate_depth,
 )
 from ._fact_adapter import ResolutionError
+from ._mapping_key_access import closed_keys as closed_mapping_keys
 from ._observed_checks import keyword_check as observed_keyword_check
 from ._program_facts import (
     CallFacts,
@@ -484,6 +485,20 @@ class _Proof:
                                 function.identity,
                             ))
             self.unknown(function, "decorated_entry", "Entry/body decoration is not proven.")
+        mapping = values.get(function.signature.kwarg)
+        if (isinstance(mapping, _Keywords) and not mapping.source_state
+                and _tracked(mapping)
+                and not any(_tracked(value) for name, value in values.items()
+                            if name != function.signature.kwarg)):
+            keys = closed_mapping_keys(analysis, function)
+            selected = {key for key, value in mapping.items.items() if _tracked(value)}
+            if keys is not None and selected.isdisjoint(keys):
+                self.note(function, 'unread_mapping_element',
+                          'PCResolve bounds all capture accesses to fixed keys: '
+                          + ', '.join(sorted(keys)) + '. The selected element is unread. '
+                          'Assumes no external frame introspection; execution and call success '
+                          'are not established.')
+                return _Value()
         frame = _Frame(
             self, function, analysis, values, ancestry + (function.identity,), dict(facts)
         )

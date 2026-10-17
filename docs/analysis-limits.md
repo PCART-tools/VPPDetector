@@ -356,6 +356,16 @@ transformations remain explicit boundaries. An absent selected argument or one
 not captured by the target's corresponding variadic parameter also yields an
 unresolved assessment.
 
+PCResolve may establish a closed `mapping_key_accesses` footprint for a
+`**kwargs` capture. If all tracked elements have keys outside that footprint,
+assessment can establish `unread_mapping_element` without interpreting unrelated
+loops or branches. Only fixed string-key subscriptions, membership and `get`
+accesses are covered. Whole-container forwarding, aliases, mutation, dynamic
+keys, nested capture and visible namespace/frame inspection prevent this proof.
+It assumes no external frame introspection and establishes element non-use,
+not that the function reaches a return or the original call succeeds. Decorator,
+entry binding and source snapshot checks still apply. Scan is unchanged.
+
 ### Supplied call facts
 
 `CallContext.known_conditions` accepts trusted Boolean predicate outcomes at
