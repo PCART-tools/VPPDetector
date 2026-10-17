@@ -667,9 +667,16 @@ class _Frame:
                 )
                 for target in targets:
                     if not isinstance(target, ast.Name):
-                        if isinstance(result, _Value) and _tracked(result):
+                        capture = self.function.signature.kwarg
+                        mapping_store = (
+                            isinstance(result, _Keywords) and result.carrier
+                            and not result.source_state
+                            and result is self.values.get(capture)
+                        )
+                        if _tracked(result) and (isinstance(result, _Value) or mapping_store):
                             retention = static_retained_store(
-                                self.analysis, self.function, statement, target
+                                self.analysis, self.function, statement, target,
+                                mapping_capture=capture if mapping_store else None,
                             )
                             if retention is not None:
                                 self.proof.handled(

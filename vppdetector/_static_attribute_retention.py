@@ -8,8 +8,8 @@ from pathlib import Path
 from ._program_facts import identity_from_target, source_constructor_entry_binding
 
 
-def retained_store(analysis, function, statement, destination):
-    """Match an executed scalar store to a closed source retention witness."""
+def retained_store(analysis, function, statement, destination, mapping_capture=None):
+    """Match a scalar or unchanged keyword-capture store to a source witness."""
     if function.query_class is None or not isinstance(destination, ast.Attribute):
         return None
     binding = source_constructor_entry_binding(analysis, function.query_class)
@@ -26,6 +26,10 @@ def retained_store(analysis, function, statement, destination):
     if len(matching) != 1:
         return None
     fact = matching[0]
+    if mapping_capture is not None and (
+            mapping_capture != function.signature.kwarg
+            or fact.get("capture_mapping_parameter") != mapping_capture):
+        return None
     witness = fact.get("store_evidence")
     hashes = fact.get("source_hashes")
     checked = fact.get("checked_methods")
