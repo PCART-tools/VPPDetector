@@ -295,7 +295,16 @@ of each result.
   receiver attribute paths, such as `(("self.closed", False),)`.
 - `known_targets`: exact library `SourceSpan` locations paired with confirmed
   `FunctionIdentity` implementations.
-- `callsite`: optional location of the original call.
+- `callsite`: optional full `SourceSpan` of the original call. When available,
+  assess asks PCResolve for bounded caller literals. It matches the exact call
+  syntax, import-backed API identity, argument slots, source spans and current
+  source hash before using a value. These are static, source-conditioned facts,
+  with assumptions recorded as `source_caller_arguments` evidence. The current
+  reader covers plain module-prefix imports and literal/alias assignments;
+  dynamic construction, mutations and effectful prefixes retain boundaries.
+  Missing or mismatched facts preserve syntax-only assessment. Caller facts
+  never enter library flow or scan caches. Selected containers still require
+  separate identity/element tracking and are not promoted to scalar values.
 - `observed_normal_returns`: bounded `ObservedNormalReturn` attestations for an
   actual source-frame entry and normal dictionary return of the same original
   call. The record includes the selected primitive, exact return span and source

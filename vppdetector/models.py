@@ -256,6 +256,9 @@ class CallContext:
     call trace checkpoint; these runtime facts never enter scan/producer caches.
     observed_normal_returns confirms original-call completion for a matching
     conditional source retention proof; completion alone never implies handling.
+    callsite optionally identifies the exact original source call. Matching
+    PCResolve caller facts may recover bounded literals under explicit source
+    assumptions; missing/mismatched source keeps syntax-only assessment.
     """
 
     expression: Union[str, ast.Call]

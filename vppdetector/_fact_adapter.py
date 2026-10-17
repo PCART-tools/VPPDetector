@@ -82,6 +82,21 @@ class PCResolveAdapter:
             self._flow_hashes[_path(path)] = hashlib.sha256(text.encode("utf-8")).hexdigest()
         self._analysis_cache = {}
         self._expansion_cache = {}
+        self._caller_store = None
+
+    def caller_inputs(self, callsite):
+        """Read optional caller facts independently of cached library flow/scan."""
+        try:
+            from pcresolve._caller_inputs import literal_inputs
+            from pcresolve.program_facts import SourceSpan
+            from pcresolve.source_snapshot import SourceStore
+        except ImportError:
+            return None
+        if self._caller_store is None:
+            self._caller_store = SourceStore()
+        span = SourceSpan(str(callsite.file_path), callsite.lineno, callsite.col_offset,
+                          callsite.end_lineno, callsite.end_col_offset)
+        return readonly(literal_inputs(span, store=self._caller_store))
 
     def validate_source(self):
         """Validate once per public query, including before a domain cache hit."""

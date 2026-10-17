@@ -213,3 +213,14 @@ Deleting the original namespace name does not delete an earlier captured alias.
 This selects a source body and does not confirm runtime attribute binding or
 activate a conditional fallback. Missing/conflicting alias evidence, visible
 replacement and definitions absent from the selected version remain unavailable.
+
+## Optional caller literals
+
+The adapter reads PCResolve's internal `source_callsite_inputs` contract in a
+separate source store. Each query rereads the caller; these records are absent
+from library analysis/expansion and scan caches. Assess validates the exact
+full call span, syntax, qualified import binding, source hash, argument slots,
+typed finite literals, evidence and source assumptions before binding values.
+It never executes the caller or imports its target. An older producer or a
+partial/mismatched record supplies no additional values. Unmodeled operations
+on recovered containers stop the proof rather than reuse stale contents.

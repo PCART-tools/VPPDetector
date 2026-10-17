@@ -34,6 +34,7 @@ from ._analysis_context import (
 )
 from ._attribute_retention import attribute_retention as observed_attribute_retention
 from ._cached_imports import cached_import_binding
+from ._caller_arguments import caller_arguments
 from ._capture_rejection import capture_rejection as observed_capture_rejection
 from ._container_predicates import container_predicate as observed_container_predicate
 from ._fact_adapter import ResolutionError
@@ -167,7 +168,13 @@ def _raw_selected(value, seen=None):
 def _protected_state(value: Any) -> bool:
     if isinstance(value, _SourceInstance):
         return True
-    return bool(getattr(value, "source_state", False))
+    if bool(getattr(value, "source_state", False)):
+        return True
+    if isinstance(value, _Positionals):
+        return any(_protected_state(item) for item in value.items)
+    if isinstance(value, _Keywords):
+        return any(_protected_state(item) for item in value.items.values())
+    return False
 
 
 def _key_presence(value: Any) -> bool:
@@ -1173,7 +1180,8 @@ class _Frame:
                 selection = slice(
                     index(node.slice.lower), index(node.slice.upper), index(node.slice.step)
                 )
-                return _Positionals(value.items[selection], value.carrier, value.kind)
+                return _Positionals(value.items[selection], value.carrier, value.kind,
+                                    value.source_state)
             return value.items[index(node.slice)]
         except (IndexError, TypeError, ValueError):
             self.unknown("positional_projection_unproven", node)
@@ -1220,6 +1228,8 @@ class _Frame:
         )
         if isinstance(node.func, ast.Attribute):
             receiver = self.expression(node.func.value)
+            if isinstance(receiver, _Positionals):
+                self.unknown('sequence_effect_unproven', node)
             if (
                 isinstance(receiver, _Value)
                 and type(receiver.literal) is str
@@ -1840,6 +1850,41 @@ def assess_change(
         # syntax is read; calls/attributes in its argument values are never run.
         frame = _Frame(proof, entry, None, {}, (), {})
         positional, keywords = frame.arguments(node)
+        caller = caller_arguments(context.adapter, call, node, target_api, entry)
+        if caller is not None:
+            source_values, assumptions = caller
+            applied = []
+            selected = (('keyword', change.old_name) if change.old_name in keywords
+                        else ('position', change.old_position))
+            for slot, value in source_values.items():
+                # A selected container needs element/identity tracking beyond
+                # the scalar selection contract. Do not pretend it is a scalar.
+                if slot == selected and value['kind'] != 'literal':
+                    continue
+                items = positional if slot[0] == 'position' else keywords
+                previous = items[slot[1]]
+                restored = _source_state(value)
+                if isinstance(restored, _Value):
+                    # Immutable primitive arguments carry no mutable alias
+                    # state for an unrelated call to invalidate.
+                    restored = _Value(restored.literal)
+                if (isinstance(previous, _Value) and previous.literal is not _UNKNOWN
+                        and (not isinstance(restored, _Value)
+                             or type(previous.literal) is not type(restored.literal)
+                             or previous.literal != restored.literal)):
+                    proof.unknown(entry, 'conflicting_call_facts',
+                                  'Caller source and supplied argument syntax disagree.')
+                items[slot[1]] = restored
+                applied.append(str(slot))
+            if applied:
+                proof.evidence.append(ParameterEvidence(
+                    entry.identity, 'source_caller_arguments',
+                    'PCResolve recovered finite literals for slots ' + ', '.join(applied)
+                    + ' from the exact original source call, conditional on: '
+                    + '; '.join(assumptions), call.callsite))
+        elif call.callsite is not None:
+            proof.note(entry, 'source_caller_arguments_unconfirmed',
+                       'Caller source facts are unavailable or do not match this exact call.')
         bound = entry.is_bound_method if call.bound_receiver is None else call.bound_receiver
         if change.old_name in keywords:
             original = keywords[change.old_name]
