@@ -14,6 +14,7 @@ import copy
 import hashlib
 import inspect
 import json
+import operator
 import textwrap
 import tokenize
 from dataclasses import dataclass, field
@@ -955,6 +956,14 @@ class _Frame:
                 if isinstance(operation, (ast.Eq, ast.NotEq)):
                     result = lval == rval
                     return _Value(result if isinstance(operation, ast.Eq) else not result, tracked)
+                numeric = type(lval) in (bool, int, float) and type(rval) in (bool, int, float)
+                text = type(lval) is type(rval) and type(lval) in (str, bytes)
+                comparison = {
+                    ast.Lt: operator.lt, ast.LtE: operator.le,
+                    ast.Gt: operator.gt, ast.GtE: operator.ge,
+                }.get(type(operation))
+                if comparison is not None and (numeric or text):
+                    return _Value(comparison(lval, rval), tracked)
             return _Value(tracked=tracked)
         if self.related(node):
             self.unknown("unsupported_value_use", node)

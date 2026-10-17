@@ -389,8 +389,8 @@ def build_source_index(
     """
     from pcresolve.import_facts import import_facts, resolve_relative_module
     from pcresolve.scope_facts import statement_scope_facts
-    from pcresolve.star_imports import static_star_imports
     from pcresolve.source_syntax import parse_python_source
+    from pcresolve.star_imports import static_star_imports
 
     root = source.package_root.resolve()
     if not root.exists():
