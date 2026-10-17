@@ -224,3 +224,12 @@ typed finite literals, evidence and source assumptions before binding values.
 It never executes the caller or imports its target. An older producer or a
 partial/mismatched record supplies no additional values. Unmodeled operations
 on recovered containers stop the proof rather than reuse stale contents.
+
+Assessment can consume `builtin_exact_callability` only for the producer's
+listed exact builtin input types, after checking its source, call, binding,
+result, dependency scope and every incoming context. Unknown/custom callable
+objects retain a boundary. A selected scalar object may be inspected through
+this protocol. Checking a capture tuple/dict's type does not inspect its selected
+elements, so the result carries no element-consumption marker.
+Likewise, checking the fixed builtin type of a derived comparison/length result
+does not consume the value or presence that produced that temporary result.

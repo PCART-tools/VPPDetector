@@ -51,6 +51,7 @@ from ._program_facts import (
     container_length_protocol,
     copy_protocol_target,
     direct_calls,
+    exact_callability_protocol,
     identity_from_target,
     immediate_body,
     mapping_protocol,
@@ -84,6 +85,7 @@ class _Value:
     key_presence: bool = False
     source_state: bool = False
     consumed: bool = False
+    type_selected: bool = False
 
 
 @dataclass
@@ -977,7 +979,8 @@ class _Frame:
             if isinstance(value, _LocalFunction):
                 self.unknown("deferred_callable_not_followed", node)
             if node.id in self.facts and isinstance(value, _Value):
-                return _Value(self.facts[node.id], value.tracked)
+                return _Value(self.facts[node.id], value.tracked,
+                              type_selected=value.type_selected)
             return value
         if isinstance(node, ast.Attribute):
             if isinstance(node.value, ast.Name):
@@ -1339,6 +1342,19 @@ class _Frame:
             self.unknown("call_target_unproven", node)
         positional, keywords = self.arguments(node)
         self.pending_values[-1] = positional + list(keywords.values())
+        callability = exact_callability_protocol(self.analysis, facts) if facts else None
+        if callability is not None and len(positional) == 1 and not keywords:
+            value = positional[0]
+            if (isinstance(value, (_Keywords, _Positionals, _KeySet))
+                    or isinstance(value, _Value)
+                    and type(value.literal) in (type(None), bool, int, float, str, bytes)):
+                self.proof.note(self.function, 'builtin_exact_callability',
+                                'This exact builtin input type has no call protocol.', node)
+                # Exact carrier type is independent of its selected payload
+                # or element presence. Only a selected object itself is read.
+                return _Value(False, isinstance(value, _Value) and value.type_selected,
+                              consumed=True)
+            self.unknown('callability_input_unproven', node)
         length_protocol = container_length_protocol(self.analysis, facts) if facts else None
         if length_protocol is not None and len(positional) == 1 and not keywords:
             value = positional[0]
@@ -1928,9 +1944,10 @@ def assess_change(
                 "Only primitive/unknown scalar arguments are modeled.",
             )
         if change.old_name in keywords:
-            keywords[change.old_name] = _Value(original.literal, tracked=True)
+            keywords[change.old_name] = _Value(original.literal, tracked=True, type_selected=True)
         else:
-            positional[change.old_position] = _Value(original.literal, tracked=True)
+            positional[change.old_position] = _Value(original.literal, tracked=True,
+                                                     type_selected=True)
         values = proof.bind(
             entry,
             positional,
