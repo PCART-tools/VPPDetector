@@ -33,7 +33,7 @@ from ._analysis_context import (
     validate_depth as _validate_depth,
 )
 from ._attribute_retention import attribute_retention as observed_attribute_retention
-from ._cached_imports import cached_import_binding
+from ._cached_imports import cached_import_binding, decorator_import_binding
 from ._caller_arguments import caller_arguments
 from ._capture_rejection import capture_rejection as observed_capture_rejection
 from ._container_predicates import container_predicate as observed_container_predicate
@@ -425,6 +425,10 @@ class _Proof:
                     ("setdefault", "data_only"),
                     ("mapping_lookup", "data_protocol"),
                 ):
+                    return False
+            elif target == 'source_module':
+                if decorator_import_binding(
+                        self.context, analysis, function, fact, effect) is None:
                     return False
             elif target == "decorator_instance":
                 construction = fact.get("construction") or {}

@@ -229,6 +229,19 @@ and exception effects additionally require the producer's builtin namespace
 preservation assumptions and hashes covering the whole analyzed source scope.
 Exceptional paths do not imply successful decoration. Arbitrary callbacks,
 imports, exception protocols or changed namespace facts cannot approve a body.
+For a cached local import inside a closed decorator proof, assess matches the
+producer's callback and decorated-entry identities, local import AST and aliases,
+preceding top-level initialization witness, full source hashes and cache/import
+assumptions. It accepts only `normal_cached_import_return` binding effects. This
+does not establish ordinary module execution, callback completion or a returned
+class/instance type; missing or inconsistent evidence keeps the decorated body
+unconfirmed.
+When a package has a property-based module `__getattr__`, assess additionally
+requires the producer's matching `source_module_getattr_missing` premise for the
+initialized child. It checks the requested name is outside the finite property
+set, the source class/factory identities and full hashes, and the standard cache
+and preserved-table assumptions. A missing premise, selected property or runtime
+confirmation substituted for this source proof does not approve the import.
 
 ## Source API alias selection
 
