@@ -451,7 +451,7 @@ class _Proof:
                         or effect.get('completion') != 'normal_return'
                         or 'standard_library_text_protocols_hold' not in fact['assumptions']):
                     return False
-            elif target in ('str.split', 'str.format'):
+            elif target in ('str.split', 'str.format', 'str.endswith'):
                 shapes = effect.get('argument_shapes')
                 if (kind != ('builtin_call', 'data_only')
                         or effect.get('protocol') != 'finite_builtin_text'
@@ -464,7 +464,44 @@ class _Proof:
                             or effect.get('restriction') != 'explicit_nonempty_separator')
                         or target == 'str.format' and (
                             effect.get('output_shape') != 'str'
-                            or effect.get('restriction') != 'no_attribute_or_item_fields')):
+                            or effect.get('restriction') != 'no_attribute_or_item_fields')
+                        or target == 'str.endswith' and (
+                            shapes != [['str']] or effect.get('output_shape') != 'bool'
+                            or effect.get('restriction') != 'literal_string_suffix')):
+                    return False
+            elif target == 'str.__getitem__':
+                bounds = effect.get('bounds')
+                if (kind != ('builtin_call', 'data_only')
+                        or effect.get('protocol') != 'finite_builtin_text_slice'
+                        or effect.get('receiver_shape') != 'str'
+                        or effect.get('output_shape') != 'str'
+                        or effect.get('completion') != 'normal_return'
+                        or not isinstance(bounds, list) or len(bounds) != 3
+                        or any(type(value) not in (int, type(None)) for value in bounds)
+                        or bounds[2] == 0):
+                    return False
+            elif target == 'len':
+                if (kind != ('builtin_call', 'data_only')
+                        or effect.get('protocol') != 'exact_builtin_string_length'
+                        or effect.get('input_shapes') != [['str']]
+                        or effect.get('output_shape') != 'int'
+                        or effect.get('completion') != 'normal_return'
+                        or fact.get('source_hashes') != analysis.inputs.get('sha256')
+                        or not {'standard_builtin_namespace_preserved',
+                                'no_unmodeled_indirect_builtin_mutation'}.issubset(fact['assumptions'])):
+                    return False
+            elif target in ('KeyError', 'TypeError', 'ValueError', 'AttributeError'):
+                shapes = effect.get('argument_shapes')
+                if (kind != ('raise', 'control_only')
+                        or effect.get('protocol') != 'builtin_exception_raise'
+                        or effect.get('completion') != 'exceptional_exit'
+                        or not isinstance(shapes, list)
+                        or any(not isinstance(shape, list) or not shape
+                               or any(item not in ('str', 'int', 'bool', 'float', 'NoneType')
+                                      for item in shape) for shape in shapes)
+                        or fact.get('source_hashes') != analysis.inputs.get('sha256')
+                        or not {'standard_builtin_namespace_preserved',
+                                'no_unmodeled_indirect_builtin_mutation'}.issubset(fact['assumptions'])):
                     return False
             elif target == "str.join":
                 if (

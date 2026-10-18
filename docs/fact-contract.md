@@ -211,6 +211,14 @@ establish consumption. Missing external decorator source is separately exposed
 as `decorator_source_unavailable`, while the primary assessment remains
 `UNKNOWN/decorated_entry`; the diagnostic does not approve the decorated body.
 
+Closed decorator proofs may contain finite string-suffix, string-slice and
+string-length operations, plus scalar builtin exception exits. Assess validates
+their protocol, argument/result shapes, slice bounds and completion kind. Length
+and exception effects additionally require the producer's builtin namespace
+preservation assumptions and hashes covering the whole analyzed source scope.
+Exceptional paths do not imply successful decoration. Arbitrary callbacks,
+imports, exception protocols or changed namespace facts cannot approve a body.
+
 ## Source API alias selection
 
 PCResolve can supply `inputs.entry_alias` for a captured plain source function.
