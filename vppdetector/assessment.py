@@ -57,6 +57,7 @@ from ._program_facts import (
     mapping_protocol,
     scalar_truth_protocol,
     source_classmethod_binding,
+    source_constructor_binding,
 )
 from ._program_facts import (
     target_status as _target_status,
@@ -1506,6 +1507,16 @@ class _Frame:
                 "; ".join(source_binding.get("assumptions", ())),
                 node,
                 identity_from_target(facts.target),
+            )
+        constructor = source_constructor_binding(self.analysis, facts)
+        if (constructor is not None and constructor['phase'] == '__init__'
+                and constructor['body_execution'] == 'synchronous'):
+            dynamic.discard('dynamic_construction')
+            self.proof.note(
+                self.function, 'source_initializer_binding',
+                'PCResolve confirms this initializer invocation only; returned instance '
+                'state remains unmodeled. ' + '; '.join(constructor['assumptions']),
+                node, identity_from_target(facts.target),
             )
         if confirmed is not None:
             # A method observation resolves this target only, not decorator

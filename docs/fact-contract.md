@@ -77,6 +77,15 @@ an allocator or initializer. Unknown definition effects may replace that phase;
 an unconfirmed proof stops scan and assessment from using the old body. The
 consumer does not evaluate those class definitions or infer an alternative phase.
 
+For a synchronous initializer invocation, assess can consume the same exact
+`constructor_bindings` proof to follow that phase despite a broader
+`dynamic_construction` boundary. This requires the initializer phase, matching
+implicit receiver/context, source hashes and assumption witness. It does not
+authorize entering an allocator's later phases, inferring returned instance state
+or treating instance attributes as ordinary dictionary stores. Bounded class
+decoration is established by the producer; assess does not execute decorators or
+infer their effects from names.
+
 Finite class-write sets may include producer-proven local string concatenations
 and subsequent reads of builtin literal payloads definitely written by that same
 helper. Scan consumes the unaffected-lookup proof without reconstructing names or
