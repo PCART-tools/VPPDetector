@@ -243,6 +243,15 @@ set, the source class/factory identities and full hashes, and the standard cache
 and preserved-table assumptions. A missing premise, selected property or runtime
 confirmation substituted for this source proof does not approve the import.
 
+For a scalar raise within a supported exception-only handler, assess matches the
+producer's `exception_translation` to the exact source try, handler and raise.
+It consumes the shared neutral exception syntax shape and validates catch types,
+exception binding, argument names, chaining, exceptional-only completion,
+handler condition and builtin-handler assumption. A missing or inconsistent
+translation record cannot approve that handler. This retains the producer's
+requirement to analyze the entire try body; a translated error cannot approve
+an unknown class query, callback, side effect or normally returning handler.
+
 ## Source API alias selection
 
 PCResolve can supply `inputs.entry_alias` for a captured plain source function.

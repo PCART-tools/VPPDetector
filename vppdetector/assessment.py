@@ -37,6 +37,7 @@ from ._cached_imports import cached_import_binding, decorator_import_binding
 from ._caller_arguments import caller_arguments
 from ._capture_rejection import capture_rejection as observed_capture_rejection
 from ._container_predicates import container_predicate as observed_container_predicate
+from ._decorator_exceptions import exception_raise_binding
 from ._fact_adapter import ResolutionError
 from ._fixed_binding import fixed_binding as observed_fixed_binding
 from ._mapping_key_access import closed_keys as closed_mapping_keys
@@ -505,7 +506,8 @@ class _Proof:
                                       for item in shape) for shape in shapes)
                         or fact.get('source_hashes') != analysis.inputs.get('sha256')
                         or not {'standard_builtin_namespace_preserved',
-                                'no_unmodeled_indirect_builtin_mutation'}.issubset(fact['assumptions'])):
+                                'no_unmodeled_indirect_builtin_mutation'}.issubset(fact['assumptions'])
+                        or not exception_raise_binding(self.context, fact, effect)):
                     return False
             elif target == "str.join":
                 if (
