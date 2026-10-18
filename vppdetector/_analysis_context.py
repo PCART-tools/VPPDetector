@@ -52,7 +52,7 @@ class AnalysisContext:
     def resolve_api(self, identity: FunctionIdentity) -> Optional[IndexedFunction]:
         entry = self.index.find(identity)
         if entry is not None:
-            return entry
+            return self._checked_entry(entry, identity)
         source_class = self.index.resolve_class(identity)
         if source_class is not None:
             analysis = self.adapter.analyze(source_class)
@@ -64,17 +64,18 @@ class AnalysisContext:
                 raise ResolutionError(
                     "Source class invocation binding is unavailable or unconfirmed.",
                     "constructor_entry_unconfirmed")
-            return replace(entry, query_class=source_class, is_bound_method=True)
+            return self._checked_entry(
+                replace(entry, query_class=source_class, is_bound_method=True), identity, analysis)
         entry = self.index.resolve_imported(identity)
         if entry is not None:
-            return entry
+            return self._checked_entry(entry, identity)
         if identity.file_path or identity.lineno:
             try:
                 analysis = self.adapter.analyze(identity)
             except ResolutionError:
                 return None
             entry = self.index.find(identity_from_target(analysis.entry))
-            return (replace(entry, query_alias=identity)
+            return (self._checked_entry(replace(entry, query_alias=identity), identity, analysis)
                     if entry and source_alias_entry(analysis, identity) else None)
         # Resolve the public class prefix before asking PCResolve for an
         # inherited implementation. Never fall back to a terminal name match.
@@ -88,7 +89,45 @@ class AnalysisContext:
                     != (method or identity).qualname.rsplit('.', 1)[-1]):
             if entry is None or source_alias_entry(analysis, method or identity) is None:
                 raise ResolutionError('Source API alias evidence is unavailable or conflicting.')
-            return replace(entry, query_alias=method or identity)
+            return self._checked_entry(
+                replace(entry, query_alias=method or identity), identity, analysis)
+        return self._checked_entry(entry, identity, analysis) if entry is not None else None
+
+    def _checked_entry(
+        self, entry: IndexedFunction, lookup: FunctionIdentity, analysis=None,
+    ) -> IndexedFunction:
+        """Reject an explicitly uncertain public lookup, separately from body facts."""
+        analysis = analysis or self.adapter.analyze(entry.query_alias or entry.identity)
+        root_name = lookup.qualname.partition('.')[0]
+        records = analysis.inputs.get('module_global_rebindings')
+        if (not isinstance(records, (list, tuple)) or any(not isinstance(record, dict)
+                or record.get('kind') != 'module_global_rebinding'
+                or record.get('status') != 'may_write' or record.get('basis') != 'source_snapshot'
+                or not isinstance(record.get('module'), str) or not record['module']
+                or not isinstance(record.get('name'), str) or not record['name']
+                or not isinstance(record.get('source_hash'), str)
+                or not isinstance(record.get('declarations'), (list, tuple))
+                or not record['declarations']
+                or any(not isinstance(source, dict)
+                    or source.get('file_path') not in analysis.inputs.get('sha256', {})
+                    or any(type(source.get(key)) is not int for key in (
+                        'lineno', 'col_offset', 'end_lineno', 'end_col_offset'))
+                    or source['lineno'] < 1 or source['col_offset'] < 0
+                    or source['end_col_offset'] < 0
+                    or (source['end_lineno'], source['end_col_offset'])
+                        <= (source['lineno'], source['col_offset'])
+                    or analysis.inputs['sha256'][source['file_path']] != record['source_hash']
+                    for source in record['declarations']) for record in records)):
+            raise ResolutionError('Module entry binding facts are unavailable or conflicting.',
+                                  'entry_binding_facts_unavailable')
+        rebound = any(record['module'] == lookup.module and record['name'] == root_name
+                      for record in records)
+        if any(boundary.get('reason') == 'module_callable_binding_unconfirmed'
+               and (boundary.get('lookup_scope') == 'module_entry'
+                    or not boundary.get('call_id'))
+               for boundary in analysis.boundaries) or rebound:
+            raise ResolutionError('The public source callable has visible global rebinding.',
+                                  'entry_callable_binding_unconfirmed')
         return entry
 
 

@@ -86,6 +86,17 @@ or treating instance attributes as ordinary dictionary stores. Bounded class
 decoration is established by the producer; assess does not execute decorators or
 infer their effects from names.
 
+Public API resolution also consumes PCResolve's module-entry binding uncertainty
+before using a direct or reexported source definition. Visible global rebinding
+of the API name or its class prefix stops both scan and assess at that lookup.
+Lexical body facts remain available in PCResolve; they cannot establish that the
+current public object still uses that body. Captured source aliases retain their
+separate binding proof.
+The resolver validates `inputs.module_global_rebindings` against the analyzed
+source hashes and checks the requested public prefix even when the implementation
+is inherited from another class. Missing or conflicting namespace records retain
+`entry_binding_facts_unavailable`, rather than approving a public lookup.
+
 Finite class-write sets may include producer-proven local string concatenations
 and subsequent reads of builtin literal payloads definitely written by that same
 helper. Scan consumes the unaffected-lookup proof without reconstructing names or

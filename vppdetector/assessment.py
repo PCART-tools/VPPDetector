@@ -2104,6 +2104,9 @@ def assess_change(
     except _Stop as outcome:
         state, reason = outcome.state, outcome.reason
     except ResolutionError as exc:
+        if exc.code in {'pcresolve_fact_contract_unavailable', 'entry_binding_facts_unavailable',
+                        'entry_callable_binding_unconfirmed'}:
+            reason = exc.code
         proof.boundaries.append(AnalysisBoundary(reason, str(exc), target_api))
     return ParameterAssessment(
         target_api,

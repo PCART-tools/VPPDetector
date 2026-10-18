@@ -71,7 +71,17 @@ def scan_api(
     try:
         entry = context.resolve_api(target_api)
     except ResolutionError as exc:
-        return _missing_api_report(index, target_api, "entry_resolution_failed", str(exc))
+        report = _missing_api_report(
+            index, target_api,
+            exc.code if exc.code in {'pcresolve_fact_contract_unavailable', 'flow_analysis_failed'}
+            else 'entry_resolution_failed', str(exc))
+        nominal = index.find(target_api)
+        if nominal is not None and exc.code in {
+                'pcresolve_fact_contract_unavailable', 'flow_analysis_failed'}:
+            return replace(report, coverage=tuple(
+                VariadicCoverage(nominal.identity, name, kind, ScanCoverageStatus.UNAVAILABLE,
+                                 0, (exc.code,)) for name, kind in nominal.variadic_parameters))
+        return report
     if entry is None or entry.is_overload:
         return _missing_api_report(
             index,
