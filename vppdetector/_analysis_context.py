@@ -26,9 +26,11 @@ class AnalysisContext:
     index: SourceIndex
     adapter: PCResolveAdapter
     _scan_cache: dict = field(default_factory=dict, init=False, repr=False)
+    _class_context_cache: dict = field(default_factory=dict, init=False, repr=False)
     _transform_spans: dict = field(default_factory=dict, init=False, repr=False)
     _return_transform_spans: dict = field(default_factory=dict, init=False, repr=False)
     _constant_tests: dict = field(default_factory=dict, init=False, repr=False)
+    _dispatch_context_cache: dict = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def from_source(cls, source: SourceContext) -> "AnalysisContext":
@@ -54,6 +56,16 @@ class AnalysisContext:
         if entry is not None:
             return self._checked_entry(entry, identity)
         source_class = self.index.resolve_class(identity)
+        # Assess callers often identify a constructor by its implementation
+        # (`Widget.__init__`) rather than by the class (`Widget`).  Entry
+        # binding is a class-call fact, so resolve that exact owning class
+        # before falling back to inherited method lookup.  Preserve file and
+        # line hints: they identify the PCBench source version being assessed.
+        if source_class is None and identity.qualname.endswith('.__init__'):
+            owner = identity.qualname.rpartition('.')[0]
+            if owner:
+                source_class = self.index.resolve_class(replace(
+                    identity, qualname=owner))
         if source_class is not None:
             analysis = self.adapter.analyze(source_class)
             fact = source_constructor_entry_binding(analysis, source_class)

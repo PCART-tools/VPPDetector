@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import math
-from pathlib import Path
+import tokenize
 
 from .models import SourceSpan
 
@@ -50,7 +50,7 @@ def _state(value, budget, depth=0):
 
 
 def caller_arguments(adapter, call, node, target, entry):
-    """Return typed slot values only for this exact source call and API binding."""
+    """Return typed slot values and the target for this exact source call."""
     if (not isinstance(call.callsite, SourceSpan)
             or not all(type(getattr(call.callsite, key)) is int for key in _FIELDS)):
         return None
@@ -61,11 +61,21 @@ def caller_arguments(adapter, call, node, target, entry):
         identities = (target, entry.identity, entry.query_class, entry.query_alias)
         names = {f'{identity.module}.{identity.qualname}' for identity in identities
                  if identity is not None}
+        if (entry.identity.qualname.endswith('.__init__')
+                and entry.identity.module == target.module):
+            class_name = entry.identity.qualname.rpartition('.')[0]
+            if class_name:
+                names.add(f'{entry.identity.module}.{class_name}')
+        receiver_bound = (isinstance(fact, dict)
+            and fact.get('target') is None
+            and fact.get('target_status') == 'receiver_expression_only'
+            and fact.get('target_expression') == ast.dump(node.func, include_attributes=False))
         if (not isinstance(fact, dict) or fact.get('kind') != 'source_callsite_inputs'
                 or fact.get('status') != 'source_bound'
                 or fact.get('scope') != 'argument_reads_on_normal_module_prefix'
                 or fact.get('runtime_values_observed') is not False
-                or fact.get('boundaries') != [] or fact.get('target') not in names
+                or fact.get('boundaries') != []
+                or not (fact.get('target') in names or receiver_bound)
                 or fact.get('call_syntax') != ast.dump(node, include_attributes=False)
                 or not isinstance(fact.get('assumptions'), list)
                 or not all(isinstance(item, str) for item in fact['assumptions'])
@@ -73,27 +83,53 @@ def caller_arguments(adapter, call, node, target, entry):
                 or not _span(fact.get('call_evidence'), path)
                 or any(fact['call_evidence'][key] != getattr(site, key) for key in _FIELDS)):
             return None
-        with Path(path).open(encoding='utf-8-sig') as stream:
-            digest = hashlib.sha256(stream.read().encode('utf-8')).hexdigest()
+        supporting = fact.get('supporting_source_sha256', {})
+        if not isinstance(supporting, dict):
+            return None
+        for support_path, support_digest in supporting.items():
+            if not isinstance(support_path, str) or not isinstance(support_digest, str):
+                return None
+            with tokenize.open(support_path) as stream:
+                support_text = stream.read()
+            if hashlib.sha256(support_text.encode('utf-8')).hexdigest() != support_digest:
+                return None
+        with tokenize.open(path) as stream:
+            source_text = stream.read()
+        digest = hashlib.sha256(source_text.encode('utf-8')).hexdigest()
         if fact.get('source_hashes') != {path: digest}:
             return None
+        source_tree = ast.parse(source_text, filename=path)
+        source_calls = [item for item in ast.walk(source_tree) if isinstance(item, ast.Call)
+            and (item.lineno, item.col_offset, item.end_lineno, item.end_col_offset)
+            == tuple(getattr(site, key) for key in _FIELDS)]
+        if (len(source_calls) != 1
+                or ast.dump(source_calls[0], include_attributes=False)
+                != ast.dump(node, include_attributes=False)):
+            return None
+        source_node = source_calls[0]
         binding = fact.get('target_binding_evidence')
-        if (not isinstance(binding, list) or not binding or any(
-                not _span(item, path) or (item['end_lineno'], item['end_col_offset'])
-                > (site.lineno, site.col_offset) for item in binding)):
+        receiver_binding_exact = (receiver_bound and isinstance(binding, list)
+            and len(binding) == 1 and _span(binding[0], path)
+            and all(binding[0][key] == getattr(node.func, key) for key in _FIELDS))
+        if (not isinstance(binding, list) or not binding
+                or receiver_bound and not receiver_binding_exact
+                or not receiver_bound and any(
+                    not _span(item, path) or (item['end_lineno'], item['end_col_offset'])
+                    > (site.lineno, site.col_offset) for item in binding)):
             return None
-        if any(isinstance(arg, ast.Starred) for arg in node.args) or any(
-                kw.arg is None for kw in node.keywords):
+        if any(isinstance(arg, ast.Starred) for arg in source_node.args) or any(
+                kw.arg is None for kw in source_node.keywords):
             return None
-        slots = [(('position', i), arg) for i, arg in enumerate(node.args)]
-        slots.extend((('keyword', kw.arg), kw.value) for kw in node.keywords)
+        slots = [(('position', i), arg) for i, arg in enumerate(source_node.args)]
+        slots.extend((('keyword', kw.arg), kw.value) for kw in source_node.keywords)
         records = fact.get('arguments')
         if not isinstance(records, list) or len(records) != len(slots):
             return None
         result, budget = {}, [2000]
         for record, (slot, argument) in zip(records, slots):
             if (not isinstance(record, dict) or record.get('argument') != dict([slot])
-                    or record.get('status') not in ('source_literal', 'unproven')):
+                    or record.get('status') not in (
+                        'source_literal', 'source_protocol', 'unproven')):
                 return None
             evidence = record.get('evidence')
             if (not isinstance(evidence, list) or not evidence
@@ -102,8 +138,18 @@ def caller_arguments(adapter, call, node, target, entry):
                 return None
             if record['status'] == 'source_literal':
                 result[slot] = _state(record.get('value'), budget)
+            elif record['status'] == 'source_protocol':
+                protocol = record.get('protocol')
+                if (not isinstance(protocol, dict) or protocol.get('kind') != 'iterable'
+                        or protocol.get('basis') != 'bounded_stub_return_protocol'
+                        or not isinstance(protocol.get('call_target'), str)
+                        or protocol.get('supporting_source_sha256') != supporting
+                        or not supporting):
+                    return None
+                result[slot] = {'kind': 'iterable', 'basis': protocol['basis'],
+                                'call_target': protocol['call_target']}
             elif 'value' in record:
                 return None
-        return result, tuple(fact['assumptions'])
+        return result, tuple(fact['assumptions']), fact['target']
     except (AttributeError, OSError, UnicodeError, ValueError, TypeError, KeyError):
         return None

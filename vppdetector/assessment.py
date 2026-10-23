@@ -34,12 +34,22 @@ from ._analysis_context import (
 )
 from ._attribute_retention import attribute_retention as observed_attribute_retention
 from ._cached_imports import cached_import_binding, decorator_import_binding
+from ._callable_object_decorators import (
+    matplotlib_docstring_function_binding,
+    matplotlib_keyword_only_method_binding,
+)
 from ._caller_arguments import caller_arguments
 from ._capture_rejection import capture_rejection as observed_capture_rejection
 from ._container_predicates import container_predicate as observed_container_predicate
+from ._context_manager_propagation import rethrows_with_body
 from ._decorator_exceptions import exception_raise_binding
 from ._fact_adapter import ResolutionError
 from ._fixed_binding import fixed_binding as observed_fixed_binding
+from ._fresh_decoration import binding as fresh_decoration_binding
+from ._fresh_decoration import documentation_format as isolated_documentation_format
+from ._fresh_member_checks import key_condition_applies as fresh_member_key_applies
+from ._fresh_member_checks import member_checks as fresh_member_checks
+from ._fresh_receiver import method_binding as fresh_method_binding
 from ._mapping_key_access import closed_keys as closed_mapping_keys
 from ._normal_returns import mapping_return as observed_mapping_return
 from ._observed_checks import keyword_check as observed_keyword_check
@@ -63,7 +73,9 @@ from ._program_facts import (
 from ._program_facts import (
     target_status as _target_status,
 )
+from ._return_attribute_dispatch import returned_attribute_method
 from ._static_attribute_retention import retained_store as static_retained_store
+from ._wrapper_forwarding import binding as wrapper_forwarding_binding
 from .models import (
     AnalysisBoundary,
     CallContext,
@@ -80,6 +92,22 @@ from .source import IndexedFunction
 _UNKNOWN = object()
 
 
+def _python_member_name(class_qualname: str, member_name: str) -> str:
+    """Return the runtime namespace name for a source-defined class member."""
+    class_name = class_qualname.rsplit('.', 1)[-1].lstrip('_')
+    if class_name and member_name.startswith('__') and not member_name.endswith('__'):
+        return '_' + class_name + member_name
+    return member_name
+
+
+class _BoundValues(dict):
+    """Source parameter values retaining the actual wrapper argument count."""
+
+    def __init__(self, values, positional_count):
+        super().__init__(values)
+        self.positional_count = positional_count
+
+
 @dataclass(frozen=True)
 class _Value:
     literal: Any = _UNKNOWN
@@ -88,6 +116,7 @@ class _Value:
     source_state: bool = False
     consumed: bool = False
     type_selected: bool = False
+    iterable: Optional[bool] = None
 
 
 @dataclass
@@ -121,12 +150,27 @@ class _LocalFunction:
     node: ast.AST
 
 
+@dataclass(frozen=True)
+class _BoundSourceMethod:
+    target: FunctionIdentity
+    tracked: bool = False
+    key_presence: bool = False
+    decorated_members: frozenset = frozenset()
+    own_attributes: frozenset = frozenset()
+    receiver_class: Optional[dict] = None
+    hierarchy: tuple = ()
+    allocation: Optional[dict] = None
+
+
 def _source_state(value):
     if not isinstance(value, dict):
         raise ValueError("Unproven receiver state")
     kind = value.get("kind")
     if kind == "literal" and type(value.get("value")) in (str, bytes, int, float, bool, type(None)):
         return _Value(value["value"], source_state=True)
+    if (kind == 'iterable' and value.get('basis') == 'bounded_stub_return_protocol'
+            and isinstance(value.get('call_target'), str)):
+        return _Value(source_state=True, iterable=True)
     if (
         kind == "mapping"
         and isinstance(value.get("items"), dict)
@@ -152,8 +196,10 @@ def _tracked(value: Any) -> bool:
     return isinstance(value, _Value) and value.tracked
 
 
-def _raw_selected(value, seen=None):
+def _raw_selected(value, seen=None, consumed_values=()):
     """Keep unresolved original values distinct from proved scalar conversions."""
+    if any(value is consumed for consumed in consumed_values):
+        return False
     seen = set() if seen is None else seen
     if id(value) in seen:
         return False
@@ -161,11 +207,11 @@ def _raw_selected(value, seen=None):
     if isinstance(value, _Value):
         return value.tracked and not value.consumed
     if isinstance(value, _Keywords):
-        return any(_raw_selected(item, seen) for item in value.items.values())
+        return any(_raw_selected(item, seen, consumed_values) for item in value.items.values())
     if isinstance(value, _Positionals):
-        return any(_raw_selected(item, seen) for item in value.items)
+        return any(_raw_selected(item, seen, consumed_values) for item in value.items)
     if isinstance(value, _SourceInstance):
-        return any(_raw_selected(item, seen) for item in value.attributes.values())
+        return any(_raw_selected(item, seen, consumed_values) for item in value.attributes.values())
     return isinstance(value, _KeySet) and _tracked(value)
 
 
@@ -248,6 +294,7 @@ class _Proof:
     consumption_witness: Optional[ParameterEvidence] = None
     frames: list = field(default_factory=list, repr=False)
     unrelated_unpack_continuation: bool = False
+    consumed_values: list = field(default_factory=list, repr=False)
 
     def note(self, function, reason, detail, node=None, target=None):
         span = (
@@ -269,12 +316,14 @@ class _Proof:
             AnalysisBoundary(reason, detail, function.identity, self.evidence[-1].callsite)
         )
         if (reason in ('mapping_effect_unproven', 'call_target_unproven',
-                       'ordinary_container_binding_unproven')
+                       'ordinary_container_binding_unproven', 'unpacking_binding_unproven')
                 and self.consumption_witness is not None and not any(
                 frame.expression_depth > 1 for frame in self.frames) and not any(
-                _raw_selected(value) for frame in self.frames
+                _raw_selected(value, consumed_values=self.consumed_values)
+                for frame in self.frames
                 for value in [*frame.values.values(),
-                              *(v for pending in frame.pending_values for v in pending)])):
+                              *(v for pending in frame.pending_values for v in pending)])
+                and self.consumed_values):
             self.note(function, 'proven_consumption_before_boundary',
                       'An earlier supported operation used the selected argument; '
                       'later effects and call success remain unresolved.', node)
@@ -363,7 +412,7 @@ class _Proof:
             values[function.signature.kwarg] = _Keywords(
                 values.get(function.signature.kwarg, {}), carrier=True
             )
-        return values
+        return _BoundValues(values, len(positional) + int(bool(bound)))
 
     def reject(self, function, reason, detail, node=None, target=None):
         if self.unrelated_unpack_continuation:
@@ -373,9 +422,29 @@ class _Proof:
         self.note(function, reason, detail, node, target or function.identity)
         raise _Stop(ParameterState.REJECTED, reason)
 
-    def decoration_preserved(self, function, analysis):
+    def decoration_preserved(self, function, analysis, positional_count=None):
         """Consume one exact body/binding proof, not callable identity alone."""
 
+        forwarding = wrapper_forwarding_binding(self.context, analysis, function, positional_count)
+        if forwarding is not None:
+            self.note(function, 'source_wrapper_argument_forwarding',
+                      'This actual call follows the proved same-args-and-kwargs wrapper path; '
+                      + '; '.join(forwarding['assumptions']), function.node.decorator_list[0])
+            return True
+        keyword_only = matplotlib_keyword_only_method_binding(
+            self.context, analysis, function, positional_count
+        )
+        if keyword_only is not None:
+            self.note(
+                function,
+                'source_call_conditioned_keyword_only_wrapper',
+                'The source-bound Matplotlib keyword-only wrapper forwards the same args '
+                'and kwargs on its normal-return path; warning guard false: '
+                + str(keyword_only['warning_guard_false']) + '. '
+                + '; '.join(keyword_only['assumptions']),
+                function.node.decorator_list[0],
+            )
+            return True
         summaries = [
             item
             for item in analysis.functions
@@ -387,6 +456,26 @@ class _Proof:
         if len(effects) != 1:
             return False
         fact = effects[0]
+        isolated = False
+        if fact.get('body_binding_status') != 'preserved':
+            fact = fresh_decoration_binding(self.context, analysis, function, summaries[0])
+            if fact is None:
+                source_binding = matplotlib_docstring_function_binding(
+                    self.context, analysis, function, effects[0]
+                )
+                if source_binding is None:
+                    return False
+                self.note(
+                    function,
+                    'source_callable_object_decorator_preserves_function',
+                    'The source-bound Matplotlib docstring decorator returns the original '
+                    'function on this function-decoration path; its only target mutation is '
+                    'the function __doc__ attribute. '
+                    + '; '.join(source_binding['assumptions']),
+                    function.node.decorator_list[0],
+                )
+                return True
+            isolated = True
         expression = fact.get("expression", {})
         decorator = function.node.decorator_list[0]
         if (
@@ -413,6 +502,17 @@ class _Proof:
             kind = (effect.get("operation"), effect.get("impact"))
             target = effect.get("target")
             if target == "input_function":
+                if kind == ('attribute_write', 'module_metadata'):
+                    shapes = effect.get('value_shapes')
+                    if (effect.get('element_path') != ['__module__']
+                            or effect.get('protocol') != 'builtin_function_module_attribute'
+                            or not isinstance(shapes, list) or not shapes
+                            or any(shape not in ('str', 'NoneType') for shape in shapes)
+                            or effect.get('execution_fields_unchanged') is not True
+                            or effect.get('runtime_write_confirmed') is not False
+                            or 'builtin_function_module_attribute' not in fact['assumptions']):
+                        return False
+                    continue
                 if kind != ("attribute_write", "documentation"):
                     return False
                 if effect.get("element_path") != ["__doc__"]:
@@ -425,7 +525,7 @@ class _Proof:
                     ("construction", "data_only"),
                     ("setdefault", "data_only"),
                     ("mapping_lookup", "data_protocol"),
-                ):
+                ) and not (isolated and isolated_documentation_format(fact, effect)):
                     return False
             elif target == 'source_module':
                 if decorator_import_binding(
@@ -541,7 +641,35 @@ class _Proof:
         )
         return True
 
-    def run(self, function, values, *, analysis=None, ancestry=(), facts=()):
+    def run(self, function, values, *, analysis=None, ancestry=(), facts=(),
+            analysis_context=None, fresh_receiver=False, fresh_receiver_exclusions=(),
+            fresh_receiver_own_attributes=(), fresh_receiver_class=None,
+            fresh_receiver_hierarchy=(), fresh_receiver_allocation=None):
+        if analysis_context is None or analysis_context is self.context:
+            return self._run(function, values, analysis=analysis, ancestry=ancestry, facts=facts,
+                fresh_receiver=fresh_receiver,
+                fresh_receiver_exclusions=fresh_receiver_exclusions,
+                fresh_receiver_own_attributes=fresh_receiver_own_attributes,
+                fresh_receiver_class=fresh_receiver_class,
+                fresh_receiver_hierarchy=fresh_receiver_hierarchy,
+                fresh_receiver_allocation=fresh_receiver_allocation)
+        previous_context = self.context
+        self.context = analysis_context
+        try:
+            return self._run(function, values, analysis=analysis, ancestry=ancestry, facts=facts,
+                fresh_receiver=fresh_receiver,
+                fresh_receiver_exclusions=fresh_receiver_exclusions,
+                fresh_receiver_own_attributes=fresh_receiver_own_attributes,
+                fresh_receiver_class=fresh_receiver_class,
+                fresh_receiver_hierarchy=fresh_receiver_hierarchy,
+                fresh_receiver_allocation=fresh_receiver_allocation)
+        finally:
+            self.context = previous_context
+
+    def _run(self, function, values, *, analysis=None, ancestry=(), facts=(),
+            fresh_receiver=False, fresh_receiver_exclusions=(),
+            fresh_receiver_own_attributes=(), fresh_receiver_class=None,
+            fresh_receiver_hierarchy=(), fresh_receiver_allocation=None):
         if function.identity in ancestry:
             self.unknown(function, "recursive_forwarding", "Recursive variadic forwarding.")
         if len(ancestry) >= self.max_depth:
@@ -555,11 +683,30 @@ class _Proof:
                 function.query_class or function.query_alias or function.identity)
         except ResolutionError as exc:
             self.unknown(function, exc.code, str(exc))
+        if (not fresh_receiver and function.query_class is not None
+                and analysis.inputs.get('entry_binding', {}).get('phase') == '__init__'):
+            receiver_facts = [fresh_method_binding(analysis, call, self.context)
+                for call in analysis.calls]
+            receiver_facts = [fact for fact in receiver_facts if fact is not None]
+            if receiver_facts:
+                origin = receiver_facts[0].get('origin', {})
+                allocation = origin.get('allocation', {})
+                if all(fact.get('origin', {}).get('allocation') == allocation
+                       for fact in receiver_facts):
+                    fresh_receiver = True
+                    fresh_receiver_own_attributes = tuple(sorted({name
+                        for fact in receiver_facts
+                        for name in fact.get('own_attributes', ())}))
+                    fresh_receiver_class = receiver_facts[0].get('receiver_class')
+                    fresh_receiver_hierarchy = tuple(analysis.inputs.get(
+                        'entry_binding', {}).get('hierarchy', ()))
+                    fresh_receiver_allocation = allocation
         if (function.query_class is not None
                 and analysis.inputs.get("entry_binding", {}).get("phase") == "__new__"):
             self.unknown(function, "dynamic_construction",
                          "Later constructor phases are unmodeled.")
-        if function.node.decorator_list and not self.decoration_preserved(function, analysis):
+        if function.node.decorator_list and not self.decoration_preserved(
+                function, analysis, getattr(values, 'positional_count', None)):
             for summary in analysis.functions:
                 if identity_from_target(summary['function']) != function.identity:
                     continue
@@ -574,6 +721,44 @@ class _Proof:
                                 function.identity,
                             ))
             self.unknown(function, "decorated_entry", "Entry/body decoration is not proven.")
+        member_check_facts = fresh_member_checks(self.context, analysis, function)
+        for check in member_check_facts[:1]:
+            checked_mapping = values.get(check['mapping_parameter'])
+            if (not isinstance(checked_mapping, _Keywords) or checked_mapping.source_state
+                    or not checked_mapping.items):
+                continue
+            if (check.get('status') == 'requires_single_exact_mapping_item'
+                    and len(checked_mapping.items) != 1):
+                continue
+            for key, selected_value in checked_mapping.items.items():
+                if type(key) is not str or not _tracked(selected_value):
+                    continue
+                applicability = [fresh_member_key_applies(candidate, key, function)
+                                 for candidate in member_check_facts]
+                if (not applicability or any(item is None for item in applicability)
+                        or len(set(applicability)) != 1 or applicability[0] is not True):
+                    continue
+                template = check['attribute_template']
+                attribute = template['prefix'] + key + template['suffix']
+                if attribute.startswith('__'):
+                    continue
+                present = [attribute in set(candidate['member_names'])
+                           | set(candidate['own_attributes'])
+                           for candidate in member_check_facts]
+                if not any(present):
+                    self.reject(function, 'source_missing_property',
+                                'A tracked mapping key selects a missing attribute on the '
+                                'unexposed source receiver: ' + attribute)
+                stores = [candidate['value_stores'].get(attribute)
+                          for candidate in member_check_facts]
+                if (all(present) and all(store is not None for store in stores)
+                        and len({repr(store.get('target')) for store in stores}) == 1):
+                    store = stores[0]
+                    self.handled(function, 'consumed_value',
+                                 'The tracked mapping value is stored by the bounded source '
+                                 'setter ' + attribute + '.',
+                                 target=identity_from_target(store['target']))
+                    return _Value()
         mapping = values.get(function.signature.kwarg)
         if (isinstance(mapping, _Keywords) and not mapping.source_state
                 and _tracked(mapping)
@@ -589,7 +774,13 @@ class _Proof:
                           'are not established.')
                 return _Value()
         frame = _Frame(
-            self, function, analysis, values, ancestry + (function.identity,), dict(facts)
+            self, function, analysis, values, ancestry + (function.identity,), dict(facts),
+            fresh_receiver=fresh_receiver,
+            fresh_receiver_exclusions=frozenset(fresh_receiver_exclusions),
+            fresh_receiver_own_attributes=frozenset(fresh_receiver_own_attributes),
+            fresh_receiver_class=fresh_receiver_class,
+            fresh_receiver_hierarchy=tuple(fresh_receiver_hierarchy),
+            fresh_receiver_allocation=fresh_receiver_allocation,
         )
         self.frames.append(frame)
         try:
@@ -607,6 +798,12 @@ class _Frame:
     values: dict
     ancestry: tuple
     facts: dict
+    fresh_receiver: bool = False
+    fresh_receiver_exclusions: frozenset = frozenset()
+    fresh_receiver_own_attributes: frozenset = frozenset()
+    fresh_receiver_class: Optional[dict] = None
+    fresh_receiver_hierarchy: tuple = ()
+    fresh_receiver_allocation: Optional[dict] = None
     returned: bool = False
     rejection_guard: bool = False
     result: Any = field(default_factory=_Value)
@@ -628,6 +825,166 @@ class _Frame:
             )
             for item in ast.walk(node)
         )
+
+    def fresh_lookup(self, method_name):
+        """Resolve one attribute on the receiver only under a fresh-origin fact."""
+        positional = self.function.node.args.posonlyargs + self.function.node.args.args
+        if (not self.function.is_bound_method or not positional
+                or positional[0].arg != 'self' or not isinstance(method_name, str)
+                or method_name.startswith('__')):
+            return None
+        # Call-site incoming facts are not lookup facts for arbitrary attributes;
+        # obtain the receiver class from a source-bound call into this method.
+        incoming = [edge for edge in self.analysis.calls
+                    if edge.target is not None
+                    and identity_from_target(edge.target) == self.function.identity
+                    and getattr(edge, 'instance_method_bindings', ())]
+        if len(incoming) == 1:
+            binding = fresh_method_binding(self.analysis, incoming[0], self.proof.context)
+            if binding is None:
+                return None
+            receiver_class = binding.get('receiver_class')
+            own_attributes = set(binding.get('own_attributes', ()))
+            hierarchy = self.analysis.inputs.get('entry_binding', {}).get('hierarchy', ())
+            allocation = binding.get('origin', {}).get('allocation', {})
+        elif self.fresh_receiver:
+            # A nested method frame can have no incoming edge in its own
+            # PCResolve summary. Carry the exact own-attribute set from the
+            # source-bound method descriptor that created this fresh frame.
+            receiver_class = self.fresh_receiver_class
+            hierarchy = self.fresh_receiver_hierarchy
+            allocation = self.fresh_receiver_allocation or {}
+            if (not isinstance(receiver_class, dict)
+                    or not isinstance(hierarchy, (list, tuple)) or not hierarchy):
+                return None
+            own_attributes = set(self.fresh_receiver_own_attributes)
+        else:
+            return None
+        if not isinstance(receiver_class, dict):
+            return None
+        if not isinstance(hierarchy, (list, tuple)) or not hierarchy:
+            return None
+        members = set(own_attributes)
+        found = []
+        by_name = {}
+        for owner in hierarchy:
+            if not isinstance(owner, dict):
+                return None
+            module, qualname = owner.get('module'), owner.get('qualname')
+            if not isinstance(module, str) or not isinstance(qualname, str):
+                return None
+            prefix = qualname + '.'
+            owner_functions = [item for item in self.proof.context.index.functions
+                               if item.identity.module == module
+                               and item.identity.qualname.startswith(prefix)
+                               and '.' not in item.identity.qualname[len(prefix):]]
+            found.extend(owner_functions)
+            owner_name = qualname.rsplit('.', 1)[-1]
+            for item in owner_functions:
+                member_name = item.identity.qualname.rsplit('.', 1)[-1]
+                by_name.setdefault(_python_member_name(owner_name, member_name), []).append(item)
+        decorated_members = set()
+        alias_targets = {}
+        for decoration in allocation.get('class_decorations', ()):
+            decorated_members.update(decoration.get('attributes', ()))
+            for generated in decoration.get('generated_class_members', ()):
+                if isinstance(generated, dict) and isinstance(generated.get('attribute'), str):
+                    members.add(generated['attribute'])
+                    alias_targets[generated['attribute']] = generated.get('target_method')
+        for hook in allocation.get('class_creation_hooks', ()):
+            if isinstance(hook, dict):
+                decorated_members.update(hook.get('attributes', ()))
+        if method_name in own_attributes:
+            return {'kind': 'instance_attribute', 'target': None,
+                    'members': frozenset(members | set(by_name))}
+        if method_name in decorated_members:
+            target_name = alias_targets.get(method_name)
+            if not isinstance(target_name, str):
+                return {'kind': 'unknown_member', 'target': None,
+                        'members': frozenset(members | decorated_members | set(by_name))}
+            aliases = [item for item in found
+                       if item.identity.qualname.rsplit('.', 1)[-1] == target_name]
+            if len(aliases) != 1 or aliases[0].node.decorator_list:
+                return {'kind': 'unknown_member', 'target': None,
+                        'members': frozenset(members | decorated_members | set(by_name))}
+            return {'kind': 'method', 'target': aliases[0].identity,
+                    'members': frozenset(members | set(by_name)),
+                    'decorated_members': frozenset(decorated_members),
+                    'own_attributes': frozenset(own_attributes),
+                    'receiver_class': receiver_class, 'hierarchy': tuple(hierarchy),
+                    'allocation': allocation}
+        candidates = by_name.get(method_name, ())
+        if not candidates:
+            if method_name in alias_targets:
+                aliases = [item for item in found
+                           if item.identity.qualname.rsplit('.', 1)[-1]
+                           == alias_targets[method_name]]
+                if len(aliases) != 1 or aliases[0].node.decorator_list:
+                    return None
+                return {'kind': 'method', 'target': aliases[0].identity,
+                        'members': frozenset(members | set(by_name)),
+                        'decorated_members': frozenset(decorated_members),
+                        'own_attributes': frozenset(own_attributes),
+                        'receiver_class': receiver_class, 'hierarchy': tuple(hierarchy),
+                        'allocation': allocation}
+            if method_name in decorated_members:
+                return {'kind': 'unknown_member', 'target': None,
+                        'members': frozenset(members | decorated_members | set(by_name))}
+            return {'kind': 'missing', 'target': None,
+                    'members': frozenset(members | set(by_name))}
+        if len(candidates) != 1 or not isinstance(candidates[0].node, ast.FunctionDef):
+            return None
+        target = candidates[0]
+        if target.node.decorator_list:
+            # Decorated/descriptor results need their own binding proof.
+            alias_targets = [generated.get('target_method')
+                for decoration in allocation.get('class_decorations', ())
+                for generated in decoration.get('generated_class_members', ())
+                if generated.get('attribute') == method_name
+                and generated.get('kind') == 'source_alias_method'
+                and generated.get('wrapper_body') == 'forward_same_arguments_to_target_method']
+            if len(alias_targets) != 1:
+                return None
+            matches = [item for item in found
+                       if item.identity.qualname.rsplit('.', 1)[-1] == alias_targets[0]]
+            if len(matches) != 1 or matches[0].node.decorator_list:
+                return None
+            target = matches[0]
+        return {'kind': 'method', 'target': target.identity,
+                'members': frozenset(members | set(by_name)),
+                'decorated_members': frozenset(decorated_members),
+                'own_attributes': frozenset(own_attributes),
+                'receiver_class': receiver_class, 'hierarchy': tuple(hierarchy),
+                'allocation': allocation}
+
+    def mapping_items(self, statement):
+        if (not isinstance(statement, ast.For) or statement.orelse
+                or not isinstance(statement.target, (ast.Tuple, ast.List))
+                or len(statement.target.elts) != 2
+                or not all(isinstance(item, ast.Name) for item in statement.target.elts)
+                or not isinstance(statement.iter, ast.Call)
+                or statement.iter.args or statement.iter.keywords
+                or not isinstance(statement.iter.func, ast.Attribute)
+                or statement.iter.func.attr != 'items'
+                or not isinstance(statement.iter.func.value, ast.Name)):
+            return None
+        mapping_name = statement.iter.func.value.id
+        mapping = self.values.get(mapping_name)
+        edge = next((item for item in direct_calls(self.analysis, self.function.identity)
+                     if (item.lineno, item.col_offset, item.end_lineno, item.end_col_offset)
+                     == (statement.iter.lineno, statement.iter.col_offset,
+                         statement.iter.end_lineno, statement.iter.end_col_offset)), None)
+        if (not isinstance(mapping, _Keywords) or mapping.source_state
+                or len(mapping.items) != 1 or edge is None
+                or edge.callee_name != mapping_name + '.items'
+                or not edge.receiver_sources
+                or any(source.get('kind') != 'parameter'
+                       or source.get('source') != mapping_name
+                       or source.get('relation') != 'direct'
+                       or source.get('value_incomplete')
+                       for source in edge.receiver_sources)):
+            return None
+        return mapping
 
     def simple_guard_read(self, node):
         """Accept finite-model reads, not calls, projections or known getters."""
@@ -773,6 +1130,22 @@ class _Frame:
                     if isinstance(target, (ast.Tuple, ast.List)):
                         names = [child.id for child in ast.walk(target)
                                  if isinstance(child, ast.Name)]
+                        receiver_name = (self.function.node.args.posonlyargs
+                            + self.function.node.args.args)
+                        unrelated_receiver_attribute_unpack = (
+                            isinstance(result, _Positionals)
+                            and len(target.elts) == len(result.items)
+                            and self.fresh_receiver and receiver_name
+                            and not self.related(statement) and not _tracked(result)
+                            and all(isinstance(child, ast.Attribute)
+                                and isinstance(child.value, ast.Name)
+                                and child.value.id == receiver_name[0].arg
+                                and child.attr in self.fresh_receiver_own_attributes
+                                and child.attr not in self.fresh_receiver_exclusions
+                                for child in target.elts)
+                        )
+                        if unrelated_receiver_attribute_unpack:
+                            continue
                         plain = all(isinstance(child, (ast.Tuple, ast.List, ast.Name,
                                                       ast.Store, ast.Load))
                                     for child in ast.walk(target))
@@ -809,6 +1182,27 @@ class _Frame:
                             and not result.source_state
                             and result is self.values.get(capture)
                         )
+                        positional = (self.function.node.args.posonlyargs
+                                      + self.function.node.args.args)
+                        if (self.fresh_receiver and _tracked(result)
+                                and isinstance(target, ast.Attribute)
+                                and isinstance(target.value, ast.Name)
+                                and positional and target.value.id == positional[0].arg
+                                and target.attr in {'__class__', '__dict__'}):
+                            self.unknown('fresh_receiver_special_attribute_mutation_unproven',
+                                         statement)
+                        if (self.fresh_receiver and _tracked(result)
+                                and isinstance(target, ast.Attribute)
+                                and isinstance(target.value, ast.Name)
+                                and positional and target.value.id == positional[0].arg
+                                and target.attr not in self.fresh_receiver_exclusions):
+                            self.proof.consumed_values.append(result)
+                            self.proof.handled(
+                                self.function, 'consumed_value',
+                                'The fresh source setter stores the selected value on its '
+                                'bound receiver.', statement,
+                            )
+                            continue
                         if _tracked(result) and (isinstance(result, _Value) or mapping_store):
                             retention = static_retained_store(
                                 self.analysis, self.function, statement, target,
@@ -913,6 +1307,52 @@ class _Frame:
                     self.statements(statement.body if truth else statement.orelse)
                 finally:
                     self.rejection_guard = previous
+            elif isinstance(statement, ast.For):
+                mapping = self.mapping_items(statement)
+                if mapping is None:
+                    self.unknown('unsupported_control_flow', statement)
+                    continue
+                key_name, value_name = (item.id for item in statement.target.elts)
+                key, item = next(iter(mapping.items.items()))
+                tracked = _tracked(item)
+                if not tracked:
+                    self.unknown('untracked_mapping_iteration', statement)
+                previous = {name: self.values.get(name, _UNKNOWN)
+                            for name in (key_name, value_name)}
+                self.values[key_name] = _Value(key, tracked=tracked,
+                                               key_presence=_key_presence(item) or tracked)
+                self.values[value_name] = item
+                self.proof.note(
+                    self.function, 'bounded_builtin_mapping_iteration',
+                    'PCResolve binds the exact direct mapping receiver; the captured '
+                    'built-in keyword dictionary has one statically known item.', statement,
+                )
+                try:
+                    self.statements(statement.body)
+                finally:
+                    for name, value in previous.items():
+                        if value is _UNKNOWN:
+                            self.values.pop(name, None)
+                        else:
+                            self.values[name] = value
+            elif isinstance(statement, ast.With):
+                fact = rethrows_with_body(self.proof.context, self.analysis,
+                                          self.function, statement)
+                if fact is None:
+                    self.unknown('unsupported_control_flow', statement)
+                    continue
+                self.proof.note(
+                    self.function,
+                    'source_context_manager_rethrows',
+                    'PCResolve binds the source context-manager call; its standard '
+                    'contextlib generator has one yield under try/finally and no '
+                    'exception handler or cleanup return. The selected body is analyzed '
+                    'with its exception preserved. Assumptions: '
+                    + '; '.join(fact['assumptions']),
+                    statement,
+                    target=fact['manager'],
+                )
+                self.statements(statement.body)
             elif isinstance(statement, ast.Assert):
                 condition = self.expression(statement.test)
                 if self.truth(condition) is not True or _tracked(condition):
@@ -953,11 +1393,19 @@ class _Frame:
                     self.unknown("exception_construction_unproven", statement)
                 # Even an established rejection guard must not execute a custom
                 # message formatter or turn an unrelated error into permission.
-                arguments = [self.expression(item) for item in call.args]
-                if any(
-                    not isinstance(item, _Value) or item.literal is _UNKNOWN for item in arguments
-                ):
-                    self.unknown("exception_construction_unproven", statement)
+                if (exception is AttributeError and self.rejection_guard
+                        and len(call.args) == 1):
+                    self.proof.note(
+                        self.function, 'rejection_message_not_required',
+                        'The selected unsupported-key guard already proves rejection; '
+                        'message formatting can only preserve or replace that failure.',
+                        statement,
+                    )
+                else:
+                    arguments = [self.expression(item) for item in call.args]
+                    if any(not isinstance(item, _Value) or item.literal is _UNKNOWN
+                           for item in arguments):
+                        self.unknown("exception_construction_unproven", statement)
                 self.proof.reject(
                     self.function, "proven_guard_rejection", ast.unparse(statement), statement
                 )
@@ -1024,7 +1472,7 @@ class _Frame:
                 self.unknown("deferred_callable_not_followed", node)
             if node.id in self.facts and isinstance(value, _Value):
                 return _Value(self.facts[node.id], value.tracked,
-                              type_selected=value.type_selected)
+                              type_selected=value.type_selected, iterable=value.iterable)
             return value
         if isinstance(node, ast.Attribute):
             if isinstance(node.value, ast.Name):
@@ -1065,6 +1513,7 @@ class _Frame:
         if isinstance(node, ast.JoinedStr):
             pieces = []
             tracked = False
+            key_presence = False
             for item in node.values:
                 if isinstance(item, ast.Constant) and type(item.value) is str:
                     pieces.append(item.value)
@@ -1079,7 +1528,8 @@ class _Frame:
                 convert = {115: str, 114: repr, 97: ascii}.get(item.conversion, str)
                 pieces.append(convert(value.literal))
                 tracked = tracked or value.tracked
-            return _Value("".join(pieces), tracked)
+                key_presence = key_presence or _key_presence(value)
+            return _Value("".join(pieces), tracked, key_presence)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
             left, right = self.expression(node.left), self.expression(node.right)
             if isinstance(left, _KeySet) and isinstance(right, _KeySet):
@@ -1273,9 +1723,154 @@ class _Frame:
             ),
             None,
         )
+        inferred_source_target = False
+        inferred_context = self.proof.context
+        if (facts is not None and facts.target is None
+                and facts.target_status == 'receiver_unresolved'):
+            inferred = returned_attribute_method(
+                self.proof.context, self.function, self.analysis, node)
+            if inferred is not None:
+                try:
+                    inferred_context = self.proof.context
+                    if inferred_context.index.find(inferred) is None:
+                        dispatch_context = self.proof.context._dispatch_context_cache.get(
+                            inferred)
+                        if dispatch_context is None:
+                            dispatch_context = AnalysisContext.for_api(
+                                self.proof.context.index.source, inferred)
+                            self.proof.context._dispatch_context_cache[inferred] = (
+                                dispatch_context)
+                        inferred_context = dispatch_context
+                    inferred_entry = inferred_context.resolve_api(inferred)
+                except (ResolutionError, OSError, ValueError, TypeError):
+                    inferred_entry = None
+                if inferred_entry is not None:
+                    facts = copy.deepcopy(facts)
+                    facts.target = inferred
+                    facts.target_status = 'resolved'
+                    facts.binding_status = 'complete'
+                    facts.binding_issues = []
+                    facts.parameter_bindings = []
+                    inferred_source_target = True
+                    self.proof.note(
+                        self.function, 'source_return_attribute_dispatch',
+                        'PCResolve binds this receiver to a source helper; every returned '
+                        'attribute is statically typed through its owner contract and resolves '
+                        'to the same source method implementation.', node, inferred)
+        numpy_iterable = (facts is not None and facts.target is not None
+            and facts.target.module == 'numpy' and facts.target.qualname == 'iterable')
+        if (facts is not None and facts.target is None
+                and facts.target_status == 'receiver_unresolved'):
+            imported_modules = self.proof.context.index.imports.get(
+                self.function.identity.module, {})
+            numpy_iterable = any(
+                imported == 'numpy' and facts.callee_name == alias + '.iterable'
+                for alias, imported in imported_modules.items())
+        if (numpy_iterable
+                and len(node.args) == 1 and not node.keywords
+                and not isinstance(node.args[0], ast.Starred)):
+            value = self.expression(node.args[0])
+            if isinstance(value, _Value) and value.iterable is not None:
+                self.proof.note(
+                    self.function, 'source_stub_iterability_predicate',
+                    'PCResolve binds the call to numpy.iterable, and its exact caller '
+                    'argument has a bounded installed-stub return protocol proving '
+                    'iterability without executing the caller expression.', node,
+                    facts.target,
+                )
+                return _Value(value.iterable, _tracked(value), _key_presence(value), consumed=True)
+        if isinstance(node.func, ast.Name):
+            local_method = self.values.get(node.func.id)
+            if isinstance(local_method, _BoundSourceMethod):
+                target = self.proof.context.index.find(local_method.target)
+                if target is None or target.is_overload or target.node.decorator_list:
+                    self.unknown('call_target_unproven', node)
+                positional, keywords = self.arguments(node)
+                try:
+                    target_analysis = self.proof.context.adapter.analyze(target.identity)
+                except ResolutionError as exc:
+                    self.unknown(exc.code, node)
+                values = self.proof.bind(target, positional, keywords, True, node,
+                                         caller=self.function)
+                self.proof.note(self.function, 'fresh_source_setter_binding',
+                                'The selected fresh-instance attribute is one plain source '
+                                'setter, bound without its implicit receiver.', node,
+                                target.identity)
+                return self.proof.run(target, values, analysis=target_analysis,
+                                      ancestry=self.ancestry, fresh_receiver=True,
+                                      fresh_receiver_exclusions=local_method.decorated_members,
+                                      fresh_receiver_own_attributes=local_method.own_attributes,
+                                      fresh_receiver_class=local_method.receiver_class,
+                                      fresh_receiver_hierarchy=local_method.hierarchy,
+                                      fresh_receiver_allocation=local_method.allocation)
+        if (isinstance(node.func, ast.Name) and node.func.id == 'getattr'
+                and self.unshadowed_builtin_name('getattr') and facts is not None
+                and facts.target is None and facts.target_status == 'builtin_boundary'
+                and len(node.args) == 3 and not node.keywords
+                and isinstance(node.args[0], ast.Name) and node.args[0].id == 'self'):
+            name_value = self.expression(node.args[1])
+            default = self.expression(node.args[2])
+            if not isinstance(name_value, _Value) or type(name_value.literal) is not str:
+                self.unknown('dynamic_attribute_lookup_unproven', node)
+            lookup = self.fresh_lookup(name_value.literal)
+            if lookup is None:
+                self.unknown('dynamic_attribute_lookup_unproven', node)
+            if lookup['kind'] == 'missing':
+                self.proof.note(self.function, 'fresh_source_missing_member',
+                                'The fresh receiver MRO and own-attribute facts contain no '
+                                + name_value.literal + '.', node)
+                return _Value(default.literal if isinstance(default, _Value) else _UNKNOWN,
+                              _tracked(name_value), _key_presence(name_value))
+            if lookup['kind'] == 'method':
+                return _BoundSourceMethod(lookup['target'], _tracked(name_value),
+                                          _key_presence(name_value),
+                                          lookup.get('decorated_members', frozenset()),
+                                          lookup.get('own_attributes', frozenset()),
+                                          lookup.get('receiver_class'),
+                                          lookup.get('hierarchy', ()),
+                                          lookup.get('allocation'))
+            self.unknown('dynamic_attribute_lookup_unproven', node)
         if isinstance(node.func, ast.Attribute):
             receiver = self.expression(node.func.value)
             if isinstance(receiver, _Positionals):
+                if (
+                    node.func.attr == 'append'
+                    and isinstance(node.func.value, ast.Name)
+                    and self.values.get(node.func.value.id) is receiver
+                    and receiver.kind == 'list'
+                    and not receiver.source_state
+                    and len(node.args) == 1
+                    and not isinstance(node.args[0], ast.Starred)
+                    and not node.keywords
+                    and facts is not None
+                    and facts.target is None
+                    and facts.target_status == 'local_container_protocol'
+                    and facts.analysis_status == 'analyzed'
+                    and facts.binding_status == 'complete'
+                    and not facts.binding_issues
+                    and not facts.target_candidates
+                    and facts.receiver_sources
+                    and all(isinstance(item, dict) for item in facts.receiver_sources)
+                    and not any(
+                        name != node.func.value.id and value is receiver
+                        for name, value in self.values.items()
+                    )
+                ):
+                    positional, keywords = self.arguments(node)
+                    if len(positional) != 1 or keywords:
+                        self.unknown('sequence_effect_unproven', node)
+                    name = node.func.value.id
+                    self.values[name] = _Positionals(
+                        receiver.items + (positional[0],), receiver.carrier,
+                        receiver.kind, receiver.source_state,
+                    )
+                    self.proof.note(
+                        self.function, 'bounded_local_list_append',
+                        'PCResolve identifies this exact append as a complete local '
+                        'container protocol call, and the receiver is a unique fresh '
+                        'source-local list.', node,
+                    )
+                    return _Value(None)
                 self.unknown('sequence_effect_unproven', node)
             if (
                 isinstance(receiver, _Value)
@@ -1304,6 +1899,26 @@ class _Frame:
                         self.unknown('mapping_effect_unproven', node)
                     receiver.items.clear()
                     return _Value(None)
+                if node.func.attr == 'setdefault':
+                    positional, keywords = self.arguments(node)
+                    key = (positional[0].literal
+                           if positional and isinstance(positional[0], _Value) else _UNKNOWN)
+                    if (not facts or receiver.source_state or len(positional) not in (1, 2)
+                            or keywords or type(key) is not str
+                            or not mapping_protocol(
+                                self.function, self.analysis, facts, 'setdefault', key)):
+                        self.unknown('mapping_effect_unproven', node)
+                    result = receiver.items.get(
+                        key, positional[1] if len(positional) == 2 else _Value(None)
+                    )
+                    receiver.items[key] = result
+                    self.proof.note(
+                        self.function, 'bounded_mapping_setdefault',
+                        'PCResolve proves this exact builtin dict.setdefault mutates the '
+                        'source kwargs mapping on normal return; the known caller values '
+                        'remain in the modeled mapping.', node,
+                    )
+                    return result
                 if node.func.attr == 'get':
                     positional, keywords = self.arguments(node)
                     key = (positional[0].literal
@@ -1382,13 +1997,15 @@ class _Frame:
             and self.unshadowed_builtin_name("isinstance")
         ):
             return self.instance_guard(node)
-        if self.related(node.func):
+        if self.related(node.func) and not inferred_source_target:
             self.unknown("call_target_unproven", node)
         positional, keywords = self.arguments(node)
         self.pending_values[-1] = positional + list(keywords.values())
         callability = exact_callability_protocol(self.analysis, facts) if facts else None
         if callability is not None and len(positional) == 1 and not keywords:
             value = positional[0]
+            if isinstance(value, _BoundSourceMethod):
+                return _Value(True, value.tracked, value.key_presence, consumed=True)
             if (isinstance(value, (_Keywords, _Positionals, _KeySet))
                     or isinstance(value, _Value)
                     and type(value.literal) in (type(None), bool, int, float, str, bytes)):
@@ -1396,8 +2013,7 @@ class _Frame:
                                 'This exact builtin input type has no call protocol.', node)
                 # Exact carrier type is independent of its selected payload
                 # or element presence. Only a selected object itself is read.
-                return _Value(False, isinstance(value, _Value) and value.type_selected,
-                              consumed=True)
+                return _Value(False, _tracked(value), _key_presence(value), consumed=True)
             self.unknown('callability_input_unproven', node)
         length_protocol = container_length_protocol(self.analysis, facts) if facts else None
         if length_protocol is not None and len(positional) == 1 and not keywords:
@@ -1505,6 +2121,13 @@ class _Frame:
         if not facts or not facts.target or captured and not isinstance(local, _LocalFunction):
             self.unknown("call_target_unproven", node)
         status = _target_status(self.analysis, facts)
+        binding_target = self.proof.context.index.find(identity_from_target(facts.target))
+        exact_keyword_forwarding = (
+            binding_target is not None
+            and _exact_keyword_container_forwarding(
+                node, self.function, binding_target, facts
+            )
+        )
         confirmed = self.proof.known_targets.get(call_span(facts))
         if confirmed is not None:
             confirmed_definition = self.proof.context.index.find(confirmed)
@@ -1551,6 +2174,12 @@ class _Frame:
                 node,
                 identity_from_target(facts.target),
             )
+        fresh_method = fresh_method_binding(self.analysis, facts, self.proof.context)
+        if fresh_method is not None:
+            dynamic.discard('dynamic_method_override_possible')
+            self.proof.note(self.function, 'fresh_source_instance_method',
+                            '; '.join(fresh_method['assumptions']), node,
+                            identity_from_target(facts.target))
         constructor = source_constructor_binding(self.analysis, facts)
         if (constructor is not None and constructor['phase'] == '__init__'
                 and constructor['body_execution'] == 'synchronous'):
@@ -1566,29 +2195,56 @@ class _Frame:
             # effects, metaclass construction, binding or later body behavior.
             dynamic.discard("dynamic_class_receiver_override_possible")
         if (
-            status not in {"resolved", "constructor", "staticmethod", "classmethod"}
+            status not in {"resolved", "constructor", "staticmethod", "classmethod", "super_method"}
             and instance is None
+            and fresh_method is None
+            and not exact_keyword_forwarding
         ) or dynamic:
             reason = sorted(dynamic)[0] if dynamic else "call_target_unproven"
             self.unknown(reason, node)
         if status == "classmethod" and confirmed is None and not source_binding:
             self.unknown("class_receiver_unconfirmed", node)
-        if any(
-            boundary.get("call_id") == facts.id
-            and boundary.get("reason")
-            in {
-                "identity_decorator_effects_unmodeled",
-                "dynamic_dispatch",
-                "dynamic_callable_binding",
-            }
-            for boundary in self.analysis.boundaries
-        ):
-            self.unknown("callee_effects_unmodeled", node)
-        target = self.proof.context.index.find(identity_from_target(facts.target))
+        target_index = (inferred_context.index if inferred_source_target
+                        else self.proof.context.index)
+        target = target_index.find(identity_from_target(facts.target))
         if target is None:
             self.unknown("call_target_unavailable", node)
+        effect_boundaries = {
+            boundary.get('reason') for boundary in self.analysis.boundaries
+            if boundary.get('call_id') == facts.id
+        } & {'identity_decorator_effects_unmodeled', 'dynamic_dispatch', 'dynamic_callable_binding'}
+        if 'identity_decorator_effects_unmodeled' in effect_boundaries:
+            try:
+                wrapped = self.proof.context.adapter.analyze(target.identity)
+            except ResolutionError:
+                wrapped = None
+            if wrapped is not None:
+                positional_count = len(positional) + int(bool(target.is_bound_method))
+                factory_forwarding = wrapper_forwarding_binding(
+                    self.proof.context, wrapped, target, positional_count)
+                keyword_only_forwarding = matplotlib_keyword_only_method_binding(
+                    self.proof.context, wrapped, target, positional_count)
+                if factory_forwarding is not None:
+                    self.proof.note(
+                        self.function, 'source_wrapper_argument_forwarding',
+                        '; '.join(factory_forwarding.get('assumptions', ())), node,
+                        target.identity,
+                    )
+                    effect_boundaries.discard('identity_decorator_effects_unmodeled')
+                elif keyword_only_forwarding is not None:
+                    self.proof.note(
+                        self.function, 'source_call_conditioned_keyword_only_wrapper',
+                        'The source-bound Matplotlib keyword-only wrapper forwards the same '
+                        'args and kwargs on its normal-return path; warning guard false: '
+                        f"{keyword_only_forwarding['warning_guard_false']}. "
+                        + '; '.join(keyword_only_forwarding['assumptions']),
+                        node, target.identity,
+                    )
+                    effect_boundaries.discard('identity_decorator_effects_unmodeled')
+        if effect_boundaries:
+            self.unknown("callee_effects_unmodeled", node)
         captures = self.capture_values(target, facts, local, node) if captured else {}
-        if ordinary and (
+        if ordinary and not inferred_source_target and (
             facts.binding_status != "complete"
             or facts.binding_issues
             or any(
@@ -1600,8 +2256,17 @@ class _Frame:
                 )
                 for argument, _ in ordinary
             )
-        ):
+        ) and not exact_keyword_forwarding:
             self.unknown("ordinary_container_binding_unproven", node)
+        if exact_keyword_forwarding:
+            self.proof.note(
+                self.function,
+                "exact_variadic_keyword_forwarding",
+                f"PCResolve proves the exact source **{self.function.signature.kwarg} mapping "
+                f"is forwarded into {target.identity.qualname}'s **{target.signature.kwarg}.",
+                node,
+                target.identity,
+            )
         values = self.proof.bind(
             target, positional, keywords, target.is_bound_method, node, caller=self.function
         )
@@ -1627,10 +2292,27 @@ class _Frame:
                 target.identity,
             )
             try:
-                expanded = self.proof.context.adapter.expand(self.analysis, facts.id)
+                expanded = (inferred_context.adapter.analyze(target.identity)
+                    if inferred_source_target else self.proof.context.adapter.expand(
+                        self.analysis, facts.id, isolate=True, preserve_lineage=True))
             except ResolutionError as exc:
                 self.proof.unknown(self.function, "flow_expansion_failed", str(exc), node)
-            result = self.proof.run(target, values, analysis=expanded, ancestry=self.ancestry)
+            fresh_receiver_facts = {}
+            if fresh_method is not None:
+                fresh_receiver_facts = {
+                    'fresh_receiver': True,
+                    'fresh_receiver_own_attributes': fresh_method.get('own_attributes', ()),
+                    'fresh_receiver_class': fresh_method.get('receiver_class'),
+                    'fresh_receiver_hierarchy': self.analysis.inputs.get(
+                        'entry_binding', {}).get('hierarchy', ()),
+                    'fresh_receiver_allocation': fresh_method.get('origin', {}).get(
+                        'allocation', {}),
+                }
+            result = self.proof.run(
+                target, values, analysis=expanded, ancestry=self.ancestry,
+                analysis_context=inferred_context if inferred_source_target else None,
+                **fresh_receiver_facts,
+            )
             if captured:
                 return result
         else:
@@ -1877,6 +2559,84 @@ def _parse_call(call: CallContext) -> Optional[ast.Call]:
     return node if isinstance(node, ast.Call) else None
 
 
+def _class_identity_for_method(context, entry):
+    """Find the exact lexical class owning one indexed source method."""
+    owner, separator, method = entry.identity.qualname.rpartition('.')
+    if not separator or not owner or not entry.identity.file_path:
+        return None
+    indexed = [item for item in context.index.classes
+        if item.module == entry.identity.module and item.qualname == owner
+        and item.file_path == entry.identity.file_path]
+    if len(indexed) == 1:
+        return indexed[0]
+    try:
+        with tokenize.open(entry.identity.file_path) as stream:
+            tree = ast.parse(stream.read(), filename=str(entry.identity.file_path))
+    except (OSError, SyntaxError, UnicodeError):
+        return None
+    matches = []
+
+    def visit(statements, scope=()):
+        for statement in statements:
+            if isinstance(statement, ast.ClassDef):
+                qualname = '.'.join((*scope, statement.name))
+                if (qualname == owner and any(isinstance(member, (ast.FunctionDef,
+                        ast.AsyncFunctionDef)) and member.name == method
+                        and member.lineno == entry.identity.lineno
+                        for member in statement.body)):
+                    matches.append(FunctionIdentity(entry.identity.module, qualname,
+                        entry.identity.file_path, statement.lineno))
+                visit(statement.body, (*scope, statement.name))
+            elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                visit(statement.body, (*scope, statement.name))
+
+    visit(tree.body)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _exact_keyword_container_forwarding(node, caller, target, facts):
+    """Validate one source ``**kwargs`` map forwarded into a callee ``**kwargs``.
+
+    Dynamic expansion normally leaves individual key bindings unresolved. It
+    is safe to preserve the mapping as a whole only when both source signatures,
+    the call syntax, and PCResolve's container provenance agree.
+    """
+    source_name = caller.signature.kwarg
+    target_name = target.signature.kwarg
+    if not source_name or not target_name:
+        return False
+    expansions = [keyword for keyword in node.keywords if keyword.arg is None]
+    if (len(expansions) != 1 or not isinstance(expansions[0].value, ast.Name)
+            or expansions[0].value.id != source_name):
+        return False
+    if any(issue.get("kind") != "dynamic_expansion" for issue in facts.binding_issues):
+        return False
+    bindings = [binding for binding in facts.parameter_bindings
+                if binding.get("argument") == {"keyword": None}]
+    if (len(bindings) != 1 or bindings[0].get("status") != "unresolved"
+            or bindings[0].get("binding_kind") != "dynamic_keyword"):
+        return False
+    sources = [argument for argument in facts.argument_sources
+               if argument.get("argument") == {"keyword": None}]
+    if len(sources) != 1 or len(sources[0].get("sources", ())) != 1:
+        return False
+    source = sources[0]["sources"][0]
+    container = sources[0].get("container_binding", {})
+    if (source.get("kind") != "parameter" or source.get("source") != source_name
+            or source.get("relation") != "contained"
+            or source.get("output_path") != ["*"]
+            or container.get("status") != "exact" or container.get("shape") != "dict"
+            or container.get("contents_unknown") is not False):
+        return False
+    flows = [flow for flow in facts.parameter_flows
+             if flow.get("argument") == {"keyword": None}]
+    return (len(flows) == 1 and flows[0].get("kind") == "parameter"
+            and flows[0].get("source") == source_name
+            and flows[0].get("relation") == "contained"
+            and flows[0].get("output_path") == ["*"]
+            and flows[0].get("status") == "flow_found")
+
+
 def assess_change(
     source: ScanSource,
     target_api: FunctionIdentity,
@@ -1922,8 +2682,46 @@ def assess_change(
         positional, keywords = frame.arguments(node)
         caller = caller_arguments(context.adapter, call, node, target_api, entry)
         if caller is not None:
-            source_values, assumptions = caller
-            applied = []
+            source_values, assumptions, source_target = caller
+            # When the exact caller expression invokes the same source class
+            # whose __init__ is being assessed, analyze the method through the
+            # class-constructor entry. PCResolve then carries the fresh receiver
+            # origin through super() and can validate instance-method bindings.
+            if (entry.query_class is None and entry.identity.qualname.endswith('.__init__')
+                    and entry.identity.module == target_api.module):
+                class_name = entry.identity.qualname.rpartition('.')[0]
+                class_target = f'{entry.identity.module}.{class_name}'
+                if source_target == class_target and class_name:
+                    class_identity = _class_identity_for_method(context, entry)
+                    if class_identity is not None:
+                        cached = context._class_context_cache.get(class_identity)
+                        if cached is None:
+                            try:
+                                class_context = AnalysisContext.for_api(
+                                    context.index.source, class_identity)
+                                class_entry = class_context.resolve_api(class_identity)
+                            except ResolutionError:
+                                class_context, class_entry = None, None
+                            if class_context is not None and class_entry is not None:
+                                context._class_context_cache[class_identity] = (
+                                    class_context, class_entry)
+                        else:
+                            class_context, class_entry = cached
+                        class_caller = (caller_arguments(class_context.adapter, call, node,
+                            target_api, class_entry) if class_context is not None
+                            and class_entry is not None
+                            and class_entry.identity == entry.identity
+                            and class_entry.query_class == class_identity else None)
+                        if class_caller is not None:
+                            context, entry, caller = class_context, class_entry, class_caller
+                            proof.context = context
+                            proof.evidence.append(ParameterEvidence(
+                                entry.identity, 'source_callsite_constructor_receiver',
+                                'The exact original call resolves to this source class, and '
+                                'PCResolve proves its constructor entry; class-root analysis '
+                                'carries the fresh receiver origin through super().',
+                                call.callsite, class_identity))
+            applied, protocol_slots = [], []
             selected = (('keyword', change.old_name) if change.old_name in keywords
                         else ('position', change.old_position))
             for slot, value in source_values.items():
@@ -1934,7 +2732,8 @@ def assess_change(
                 items = positional if slot[0] == 'position' else keywords
                 previous = items[slot[1]]
                 restored = _source_state(value)
-                if isinstance(restored, _Value):
+                if (isinstance(restored, _Value) and restored.literal is not _UNKNOWN
+                        and restored.iterable is None):
                     # Immutable primitive arguments carry no mutable alias
                     # state for an unrelated call to invalidate.
                     restored = _Value(restored.literal)
@@ -1946,10 +2745,18 @@ def assess_change(
                                   'Caller source and supplied argument syntax disagree.')
                 items[slot[1]] = restored
                 applied.append(str(slot))
+                if source_values[slot].get('kind') == 'iterable':
+                    protocol_slots.append(str(slot))
             if applied:
+                description = (
+                    'PCResolve recovered bounded static protocol facts for slots '
+                    if protocol_slots else
+                    'PCResolve recovered finite literals for slots '
+                )
+                selected_slots = protocol_slots if protocol_slots else applied
                 proof.evidence.append(ParameterEvidence(
                     entry.identity, 'source_caller_arguments',
-                    'PCResolve recovered finite literals for slots ' + ', '.join(applied)
+                    description + ', '.join(selected_slots)
                     + ' from the exact original source call, conditional on: '
                     + '; '.join(assumptions), call.callsite))
         elif call.callsite is not None:

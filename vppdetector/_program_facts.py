@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from ._creation_metadata import _observer, creation_metadata_premises
 from .models import FunctionIdentity, SourceSpan
 
 
@@ -269,8 +270,8 @@ def copy_protocol_target(owner, analysis, call, value) -> Optional[FunctionIdent
 
 
 def mapping_protocol(owner, analysis, call, operation, key=None) -> bool:
-    """Validate existing whole-mapping clear or named-key get producer facts."""
-    if (operation not in ('clear', 'get')
+    """Validate bounded PCResolve facts for exact builtin mapping operations."""
+    if (operation not in ('clear', 'get', 'setdefault')
             or analysis.inputs.get('conditional_source_state')
             or call.target_status != 'local_container_protocol'
             or call.analysis_status != 'analyzed' or call.target or call.target_candidates
@@ -284,7 +285,9 @@ def mapping_protocol(owner, analysis, call, operation, key=None) -> bool:
                    or not isinstance(value.get('source'), str)
                    for value in call.receiver_sources)
             or any(value.get(flag) for value in call.receiver_sources for flag in (
-                'value_incomplete', 'import_incomplete', 'import_modified', 'projection'))
+                'value_incomplete', 'import_incomplete', 'import_modified'))
+            or (operation != 'setdefault' and any(
+                value.get('projection') for value in call.receiver_sources))
             or any(b.get('call_id') == call.id and b.get('reason') not in {'depth_limit'}
                    for b in analysis.boundaries)
             or any(not isinstance(item, dict)
@@ -325,6 +328,73 @@ def mapping_protocol(owner, analysis, call, operation, key=None) -> bool:
                 and effect.get('object_sources') == list(dict.fromkeys(objects))
                 and isinstance(effect.get('conditions'), (list, tuple))
                 and consistent_conditions(effect['conditions']) and witness(effect.get('evidence')))
+    if operation == 'setdefault':
+        kwarg = owner.node.args.kwarg
+        if (kwarg is None or not isinstance(node.func.value, ast.Name)
+                or node.func.value.id != kwarg.arg or not isinstance(key, str)
+                or not isinstance(node.args[0], ast.Constant)
+                or type(node.args[0].value) is not str or node.args[0].value != key
+                or len(node.args) not in (1, 2)
+                or len(call.effects) != 1):
+            return False
+        parameter_name = kwarg.arg
+        object_source = '$parameter:{}:{}:{}'.format(
+            call.caller.file_path, owner.identity.qualname, parameter_name)
+        effect = call.effects[0]
+        mapping_roots = effect.get('mapping')
+        parameter_location = (kwarg.lineno, kwarg.col_offset,
+                              kwarg.end_lineno, kwarg.end_col_offset)
+
+        def receiver_witness(evidence):
+            parsed = (_expression(evidence.get('source_text'))
+                      if isinstance(evidence, dict) else None)
+            return (isinstance(parsed, ast.Name)
+                    and parsed.id == parameter_name
+                    and evidence.get('file_path') == call.caller.file_path
+                    and _location(evidence) == parameter_location)
+
+        direct_results = [value for value in call.result_sources
+                          if value.get('kind') == 'call_result'
+                          and value.get('relation') == 'direct'
+                          and value.get('object_only') is True]
+        receiver_parameters = [value for value in call.receiver_sources
+                               if value.get('kind') == 'parameter'
+                               and value.get('source') == parameter_name]
+        return (
+            effect.get('kind') == 'mapping_element'
+            and effect.get('operation') == 'setdefault'
+            and effect.get('object_source') == object_source
+            and effect.get('element_path') == [key]
+            and effect.get('status') == 'bounded'
+            and effect.get('completion') == 'normal_return'
+            and effect.get('state_before') in {'present', 'absent', 'unknown'}
+            and effect.get('insertion') in {'never', 'always', 'conditional'}
+            and isinstance(effect.get('conditions'), (list, tuple))
+            and consistent_conditions(effect['conditions'])
+            and witness(effect.get('evidence'))
+            and bool(direct_results)
+            and any(isinstance(value.get('evidence'), (list, tuple))
+                    and any(witness(evidence) for evidence in value['evidence'])
+                    for value in direct_results)
+            and isinstance(mapping_roots, (list, tuple))
+            and any(isinstance(value, dict)
+                    and value.get('kind') == 'parameter'
+                    and value.get('name') == parameter_name
+                    for value in mapping_roots)
+            and bool(receiver_parameters)
+            and all(isinstance(value.get('output_path'), (list, tuple))
+                    and bool(value['output_path'])
+                    and all(isinstance(part, str) for part in value['output_path'])
+                    and (not value.get('projection')
+                         or value.get('projection') == value.get('output_path'))
+                    and not any(value.get(flag) for flag in (
+                        'value_incomplete', 'import_incomplete', 'import_modified'))
+                    and isinstance(value.get('evidence'), (list, tuple))
+                    and any(receiver_witness(evidence) for evidence in value['evidence'])
+                    for value in receiver_parameters)
+            and all(value in receiver_parameters or value.get('relation') == 'contained'
+                    for value in call.receiver_sources)
+        )
     if (len(node.args) not in (1, 2) or not isinstance(node.args[0], ast.Constant)
             or type(node.args[0].value) is not str or node.args[0].value != key or call.effects):
         return False
@@ -825,6 +895,634 @@ def conditional_path_conditions(analysis, call, target, flow):
     return tuple(result) if consistent_conditions(result) else None
 
 
+def _creation_method_premises(hook: dict, binding: dict) -> bool:
+    calls = hook.get('method_calls')
+    claimed = 'source_class_creation_call_graph' in hook.get('assumptions', ())
+    if calls is None:
+        return not claimed
+    if not claimed or not isinstance(calls, (list, tuple)) or not 1 <= len(calls) <= 256:
+        return False
+
+    def identity(value):
+        if (not isinstance(value, dict)
+                or any(not isinstance(value.get(key), str) or not value[key]
+                       for key in ('module', 'qualname', 'file_path'))
+                or type(value.get('lineno')) is not int or value['lineno'] < 1
+                or value['file_path'] not in hook['source_hashes']):
+            return None
+        return tuple(value[key] for key in ('module', 'qualname', 'file_path', 'lineno'))
+
+    def witness(value, owner, declaration=False):
+        return (isinstance(value, dict) and value.get('file_path') == owner[2]
+                and all(type(value.get(key)) is int and value[key] >= 0
+                        for key in ('lineno', 'col_offset', 'end_lineno', 'end_col_offset'))
+                and value['lineno'] >= owner[3]
+                and (not declaration or value['lineno'] == owner[3])
+                and (value['lineno'], value['col_offset'])
+                    < (value['end_lineno'], value['end_col_offset']))
+
+    root = identity(hook['target'])
+    if root is None:
+        return False
+    hierarchy = {(owner.get('module'), owner.get('qualname'), owner.get('file_path'))
+                 for owner in binding.get('hierarchy', ()) if isinstance(owner, dict)}
+    if (root[0], root[1].rpartition('.')[0], root[2]) not in hierarchy:
+        return False
+    graph, sites = {}, set()
+    for call in calls:
+        if not isinstance(call, dict):
+            return False
+        caller, target = identity(call.get('caller')), identity(call.get('target'))
+        name = call.get('attribute')
+        if (caller is None or target is None or not isinstance(name, str) or not name
+                or name.startswith('__') or name == 'mro' or name in hook['attributes']
+                or target[1].rsplit('.', 1)[-1] != name
+                or (target[0], target[1].rpartition('.')[0], target[2]) not in hierarchy
+                or call.get('receiver_class') != hook['receiver_class']
+                or call.get('binding') != 'builtin_classmethod'
+                or call.get('completion') != 'normal_return_only'
+                or call.get('argument_binding') != 'implicit_receiver_only'
+                or not witness(call.get('call_evidence'), caller)
+                or not witness(call.get('target_evidence'), target, declaration=True)):
+            return False
+        site = (caller, tuple(call['call_evidence'][key] for key in (
+            'lineno', 'col_offset', 'end_lineno', 'end_col_offset')))
+        if site in sites:
+            return False
+        sites.add(site)
+        graph.setdefault(caller, set()).add(target)
+    vertices = set(graph) | {target for targets in graph.values() for target in targets}
+    if len(vertices) > 16 or root not in graph:
+        return False
+    visited, active = set(), set()
+
+    def visit(vertex):
+        if vertex in active:
+            return False
+        if vertex in visited:
+            return True
+        active.add(vertex)
+        if any(not visit(target) for target in graph.get(vertex, ())):
+            return False
+        active.remove(vertex)
+        visited.add(vertex)
+        return True
+
+    return visit(root) and visited == vertices
+
+
+def _creation_query_premises(hook: dict, supporting: dict) -> bool:
+    queries = hook.get('native_type_queries')
+    claimed = 'source_class_creation_native_queries' in hook.get('assumptions', ())
+    if queries is None:
+        return not claimed
+    if not claimed or not isinstance(queries, (list, tuple)) or not 1 <= len(queries) <= 256:
+        return False
+    primary = hook['source_hashes']
+    if (not isinstance(supporting, dict)
+            or any(not isinstance(path, str) or not isinstance(digest, str)
+                   or len(digest) != 64 or any(char not in '0123456789abcdef' for char in digest)
+                   or path in primary for path, digest in supporting.items())):
+        return False
+    hashes = {**primary, **supporting}
+    callers = [hook['target']] + [call['target'] for call in hook.get('method_calls', ())]
+    required = {'source_snapshot_bindings_hold', 'standard_builtin_namespace_preserved',
+        'builtin_type_iteration_raises_typeerror', 'source_function_execution_binding_preserved',
+        'no_external_frame_or_gc_observation', 'no_external_monkeypatch_or_import_hook',
+        'no_unmodeled_indirect_function_mutation', 'no_unmodeled_indirect_module_mutation'}
+    seen = set()
+
+    def identity(value):
+        return (isinstance(value, dict)
+                and all(isinstance(value.get(key), str) and value[key]
+                        for key in ('module', 'qualname', 'file_path'))
+                and type(value.get('lineno')) is int and value['lineno'] >= 1
+                and value['file_path'] in hashes)
+
+    def witness(value, owner=None):
+        return (isinstance(value, dict) and isinstance(value.get('file_path'), str)
+                and value['file_path'] in hashes
+                and (owner is None or value.get('file_path') == owner.get('file_path'))
+                and all(type(value.get(key)) is int and value[key] >= 0 for key in (
+                    'lineno', 'col_offset', 'end_lineno', 'end_col_offset'))
+                and value['lineno'] >= (owner.get('lineno', 1) if owner else 1)
+                and _location(value)[:2] < _location(value)[2:])
+
+    for query in queries:
+        if not isinstance(query, dict):
+            return False
+        protocol, caller = query.get('source_protocol'), query.get('caller')
+        if (not isinstance(protocol, dict) or not identity(caller) or caller not in callers
+                or query.get('receiver_class') != hook['receiver_class']
+                or query.get('argument_binding') != 'implicit_classmethod_receiver'
+                or query.get('phase') != 'before_class_decorators'
+                or not isinstance(query.get('parameter'), str) or not query['parameter']
+                or caller == hook['target'] and query['parameter'] != hook['parameter']
+                or not witness(query.get('call_evidence'), caller)
+                or type(query.get('result')) is not bool
+                or protocol.get('kind') != 'source_native_type_iterability_predicate'
+                or protocol.get('status') != 'requires_native_type_input'
+                or protocol.get('basis') != 'source_snapshot'
+                or protocol.get('precondition') != {
+                    'argument': {'position': 0}, 'exact_metaclass': 'type'}
+                or type(protocol.get('result')) is not bool or protocol['result'] != query['result']
+                or protocol.get('runtime_input_confirmed') is not False
+                or protocol.get('effects') != 'none_if_precondition'
+                or protocol.get('completion') != 'normal_return_if_precondition_and_lookup_succeeds'
+                or protocol.get('primitive_bindings') != {
+                    'iter': 'confirmed_builtin', 'TypeError': 'confirmed_builtin'}
+                or not isinstance(protocol.get('source_hashes'), dict)
+                or any(protocol['source_hashes'].get(path) != digest
+                       for path, digest in primary.items())
+                or any(hashes.get(path) != digest
+                       for path, digest in protocol['source_hashes'].items())
+                or not isinstance(protocol.get('assumptions'), (list, tuple))
+                or any(not isinstance(value, str) for value in protocol['assumptions'])
+                or not required.issubset(protocol['assumptions'])
+                or not set(protocol['assumptions']).issubset(hook['assumptions'])):
+            return False
+        reference = protocol.get('source_binding')
+        if not isinstance(reference, dict):
+            return False
+        target, requested = reference.get('target'), reference.get('requested')
+        supporting = reference.get('source_hashes')
+        if (not isinstance(target, dict) or not isinstance(requested, dict)
+                or any(not isinstance(target.get(key), str) or not target[key]
+                       for key in ('module', 'qualname', 'file_path'))
+                or type(target.get('lineno')) is not int or target['lineno'] < 1
+                or target['file_path'] not in protocol['source_hashes']
+                or not isinstance(requested.get('module'), str)
+                or not isinstance(requested.get('name'), str)
+                or query.get('callee') != requested['module'] + '.' + requested['name']
+                or reference.get('kind') != 'source_module_binding_reference'
+                or reference.get('status') != 'unique_declaration_when_lookup_succeeds'
+                or reference.get('basis') != 'source_snapshot'
+                or reference.get('completion') != 'normal_module_return_and_attribute_lookup_only'
+                or type(reference.get('may_be_unbound')) is not bool
+                or reference.get('runtime_target_confirmed') is not False
+                or reference.get('callable_identity_proven') is not False
+                or reference.get('body_binding_proven') is not False
+                or not isinstance(supporting, dict) or not supporting
+                or target['file_path'] not in supporting
+                or any(protocol['source_hashes'].get(path) != digest
+                       for path, digest in supporting.items())
+                or not isinstance(reference.get('paths'), (list, tuple))
+                or not 1 <= len(reference['paths']) <= 64
+                or any(not isinstance(path, dict) for path in reference['paths'])
+                or not isinstance(reference.get('assumptions'), (list, tuple))
+                or any(not isinstance(value, str) for value in reference['assumptions'])
+                or not {'source_snapshot_bindings_hold', 'standard_source_import_protocol',
+                    'standard_module_attribute_lookup', 'no_external_monkeypatch_or_import_hook',
+                    'no_unmodeled_indirect_module_mutation'}.issubset(reference['assumptions'])
+                or not set(reference['assumptions']).issubset(protocol['assumptions'])):
+            return False
+        for path in reference['paths']:
+            conditions, imports = path.get('conditions'), path.get('imports')
+            if (type(path.get('fallback')) is not bool
+                    or not isinstance(conditions, (list, tuple)) or len(conditions) > 128
+                    or not isinstance(imports, (list, tuple)) or len(imports) > 64
+                    or any(not isinstance(condition, dict)
+                           or condition.get('branch') not in ('if', 'else')
+                           or not witness(condition.get('evidence')) for condition in conditions)):
+                return False
+            previous = target['module'], target['qualname']
+            for imported in imports:
+                if (not isinstance(imported, dict)
+                        or any(not isinstance(imported.get(key), str) or not imported[key]
+                               for key in ('module', 'imported_module',
+                                           'imported_name', 'binding_name'))
+                        or (imported['imported_module'], imported['imported_name']) != previous
+                        or type(imported.get('wildcard')) is not bool
+                        or imported.get('completion') != 'normal_import_return_only'
+                        or not witness(imported.get('evidence'))):
+                    return False
+                previous = imported['module'], imported['binding_name']
+            if previous != (requested['module'], requested['name']):
+                return False
+        definition = protocol.get('function_evidence')
+        if (not witness(definition, target) or definition['lineno'] != target['lineno']
+                or any(not witness(protocol.get(key), target)
+                       or _location(protocol[key])[:2] < _location(definition)[:2]
+                       or _location(protocol[key])[2:] > _location(definition)[2:]
+                       for key in ('iteration_evidence', 'handler_evidence'))
+                or _location(protocol['iteration_evidence'])[2:]
+                    > _location(protocol['handler_evidence'])[:2]):
+            return False
+        decorations = protocol.get('decorator_effects')
+        if (not isinstance(decorations, (list, tuple)) or len(decorations) > 1
+                or any(not isinstance(fact, dict)
+                       or fact.get('identity_status') != 'preserved'
+                       or fact.get('body_binding_status') != 'preserved'
+                       or fact.get('boundaries') != []
+                       or not identity(fact.get('function'))
+                       or identity_from_target(fact.get('function')) != identity_from_target(target)
+                       or not isinstance(fact.get('source_hashes'), dict)
+                       or target['file_path'] not in fact['source_hashes']
+                       or any(protocol['source_hashes'].get(path) != digest
+                              for path, digest in fact['source_hashes'].items())
+                       or not isinstance(fact.get('assumptions'), (list, tuple))
+                       or any(not isinstance(value, str) for value in fact['assumptions'])
+                       or not set(fact['assumptions']).issubset(protocol['assumptions'])
+                       for fact in decorations)):
+            return False
+        site = (tuple(caller.get(key) for key in ('module', 'qualname', 'file_path', 'lineno')),
+                _location(query['call_evidence']))
+        if site in seen:
+            return False
+        seen.add(site)
+    return True
+
+
+def _class_creation_metadata_queries_premises(
+    analysis: Any, binding: dict, hook: dict, hook_index: int,
+) -> bool:
+    """Consume only the bounded class metadata pipeline used to form ``set``.
+
+    General class observers can project arbitrary source-derived values into a
+    new class namespace.  Those remain unsupported.  This reader accepts the
+    narrower metadata-only chain emitted for a fresh ``set`` wrapper: presence
+    checks, metadata writes, a setter-name query used to form its signature,
+    and the documentation helper.  Every nested fact stays tied to this source
+    snapshot and to the active creation hook.
+    """
+    records = hook.get('class_metadata_queries')
+    claims = hook.get('assumptions', ())
+    if records is None:
+        return 'source_creation_phase_class_metadata_input' not in claims
+    required = {
+        'source_snapshot_bindings_hold', 'builtin_type_class_creation_protocol',
+        'source_class_creation_effects', 'source_creation_phase_class_metadata_input',
+        'no_external_monkeypatch_or_import_hook', 'no_unmodeled_indirect_class_mutation',
+    }
+    if (not isinstance(records, (list, tuple)) or not 1 <= len(records) <= 256
+            or not isinstance(claims, (list, tuple)) or not required.issubset(claims)
+            or hook.get('attributes') != ['set']):
+        return False
+    source_hashes = analysis.inputs.get('sha256', {})
+    supporting = analysis.inputs.get('supporting_source_sha256', {})
+    if not isinstance(source_hashes, dict) or not isinstance(supporting, dict):
+        return False
+    available = {**source_hashes, **supporting}
+    hook_hashes = hook.get('source_hashes')
+    if hook_hashes != source_hashes:
+        return False
+    callers = [hook.get('target')]
+    callers.extend(call.get('target') for call in hook.get('method_calls', ())
+                   if isinstance(call, dict))
+    writes, presences, setter_queries, documentation, matplotlib_updates = [], [], [], [], []
+
+    def identity(value):
+        return (isinstance(value, dict)
+                and all(isinstance(value.get(key), str) and value[key]
+                        for key in ('module', 'qualname', 'file_path'))
+                and type(value.get('lineno')) is int and value['lineno'] >= 1
+                and value['file_path'] in available)
+
+    def source_reference(value):
+        return (isinstance(value, dict)
+                and all(isinstance(value.get(key), str) and value[key]
+                        for key in ('module', 'qualname', 'file_path'))
+                and type(value.get('lineno')) is int and value['lineno'] >= 0
+                and value['file_path'] in available)
+
+    def hashes_match(value):
+        hashes = value.get('source_hashes') if isinstance(value, dict) else None
+        return (isinstance(hashes, dict) and bool(hashes)
+                and all(isinstance(path, str) and available.get(path) == digest
+                        for path, digest in hashes.items()))
+
+    def witness(value, owner=None):
+        return (isinstance(value, dict) and value.get('file_path') in available
+                and (owner is None or value.get('file_path') == owner.get('file_path'))
+                and all(type(item) is int and item >= 0 for item in _location(value))
+                and value['lineno'] >= (owner.get('lineno', 1) if owner else 1)
+                and _location(value)[:2] < _location(value)[2:])
+
+    def assumptions_match(value):
+        assumptions = value.get('assumptions') if isinstance(value, dict) else None
+        return (isinstance(assumptions, (list, tuple))
+                and all(isinstance(item, str) for item in assumptions)
+                and set(assumptions).issubset(claims))
+
+    def matplotlib_set_marker(fact, target=None, attribute=None):
+        if (not isinstance(fact, dict)
+                or fact.get('kind') != 'source_matplotlib_artist_autogenerated_set_signature'
+                or fact.get('status') != 'source_bound'
+                or fact.get('runtime_metadata_confirmed') is not False
+                or fact.get('completion') != 'normal_module_initialization_only'
+                or fact.get('attribute') != '_autogenerated_signature'
+                or fact.get('value') is not True
+                or attribute not in (None, '_autogenerated_signature')
+                or not identity(fact.get('target'))
+                or not identity(fact.get('updater'))
+                or fact['target'].get('module') != 'matplotlib.artist'
+                or fact['target'].get('qualname') != 'Artist.set'
+                or fact['updater'].get('module') != 'matplotlib.artist'
+                or fact['updater'].get('qualname') !=
+                    'Artist._update_set_signature_and_docstring'
+                or target is not None and fact.get('target') != target
+                or not witness(fact.get('write_evidence'), fact['updater'])
+                or not witness(fact.get('module_call_evidence'),
+                               {'file_path': fact['updater']['file_path'],
+                                'lineno': fact['target']['lineno']})
+                or not hashes_match(fact) or not assumptions_match(fact)):
+            return False
+        return True
+
+    def private_projections_match(entry, parent_assumptions):
+        projections = entry.get('private_query_results')
+        if (not isinstance(projections, (list, tuple)) or not 1 <= len(projections) <= 256
+                or 'source_private_observer_result_projection' not in parent_assumptions):
+            return False
+        for projection in projections:
+            query = projection.get('query') if isinstance(projection, dict) else None
+            guard = projection.get('observation_guard') if isinstance(projection, dict) else None
+            assumptions = projection.get('assumptions') if isinstance(projection, dict) else None
+            if (not isinstance(projection, dict)
+                    or projection.get('kind') != 'private_observer_data_result'
+                    or projection.get('basis') != 'source_snapshot'
+                    or projection.get('scope') != 'observer_class_identity_only'
+                    or projection.get('runtime_execution_confirmed') is not False
+                    or not identity(projection.get('owner_class'))
+                    or not source_reference(projection.get('caller'))
+                    or not witness(projection.get('call_evidence'), projection.get('caller'))
+                    or not isinstance(assumptions, (list, tuple))
+                    or 'source_private_observer_result_projection' not in assumptions
+                    or not set(assumptions).issubset(parent_assumptions)
+                    or not isinstance(query, dict)
+                    or query.get('kind') != 'source_private_class_metadata_observer'
+                    or query.get('status') != 'requires_native_class_metadata'
+                    or query.get('runtime_execution_confirmed') is not False
+                    or query.get('completion') != 'normal_return_only'
+                    or 'result' in query
+                    or query.get('result_shape') not in ('native_string_list',
+                                                         'native_string_set_mapping')
+                    or not hashes_match(query)
+                    or not isinstance(query.get('owner_binding'), dict)
+                    or query['owner_binding'].get('status') != 'requires_source_member_bindings'
+                    or query.get('owner_class') != projection.get('owner_class')
+                    or not isinstance(guard, dict)
+                    or not _observer({'observation_guard': guard,
+                                      'assumptions': assumptions}, source_hashes)):
+                return False
+        return True
+
+    for record in records:
+        if (not isinstance(record, dict) or record.get('status') != 'source_bound'
+                or record.get('completion') != 'normal_return_only'
+                or record.get('runtime_execution_confirmed') is not False
+                or record.get('receiver_class') != hook.get('receiver_class')
+                or record.get('caller') not in callers
+                or not identity(record.get('caller'))
+                or not hashes_match(record) or not assumptions_match(record)
+                or not witness(record.get('call_evidence'), record.get('caller'))):
+            return False
+        kind = record.get('kind')
+        if kind == 'source_bound_callable_metadata_presence':
+            fact = record.get('metadata_fact')
+            if (record.get('operation') != 'builtin_hasattr'
+                    or record.get('result') is not True
+                    or not isinstance(record.get('method_name'), str)
+                    or record.get('metadata_attribute') not in (
+                        '_supports_rasterization', '_autogenerated_signature')
+                    or not isinstance(fact, dict) or fact.get('status') != 'source_bound'
+                    or fact.get('runtime_metadata_confirmed') is not False
+                    or not hashes_match(fact) or not assumptions_match(fact)
+                    or fact.get('attribute') != record['metadata_attribute']):
+                return False
+            fact_kind = fact.get('kind')
+            if fact_kind == 'source_wrapper_custom_function_metadata':
+                if (fact.get('formation_phase') != 'class_body_function_decoration'
+                        or type(fact.get('value')) not in (str, int, bool, float, type(None))
+                        or not identity(fact.get('decorator'))
+                        or not identity(fact.get('decorated_function'))
+                        or not witness(fact.get('evidence'))):
+                    return False
+            elif fact_kind == 'source_matplotlib_rasterization_wrapper_metadata':
+                protocol = fact.get('wrapper_metadata_protocol')
+                if (fact.get('formation_phase') != 'class_body_function_decoration'
+                        or fact.get('attribute') != '_supports_rasterization'
+                        or fact.get('value') is not True
+                        or fact.get('wrapper_name') != 'draw_wrapper'
+                        or not identity(fact.get('decorator'))
+                        or fact['decorator'].get('module') != 'matplotlib.artist'
+                        or fact['decorator'].get('qualname') != 'allow_rasterization'
+                        or not identity(fact.get('decorated_function'))
+                        or fact.get('decorated_function') != record.get('target')
+                        or not witness(fact.get('evidence'), fact['decorator'])
+                        or not isinstance(protocol, dict)
+                        or protocol.get('kind') != 'standard_functools_wraps'
+                        or protocol.get('status') != 'source_bound'
+                        or not hashes_match(protocol)
+                        or not assumptions_match(protocol)
+                        or not hashes_match(fact)):
+                    return False
+            elif fact_kind == 'source_matplotlib_artist_autogenerated_set_signature':
+                if not matplotlib_set_marker(fact, record.get('target'),
+                                             record.get('metadata_attribute')):
+                    return False
+            elif fact_kind in ('source_module_initialization_method_metadata',
+                               'source_ancestor_class_creation_method_metadata'):
+                nested = (fact.get('metadata_write') if fact_kind ==
+                          'source_module_initialization_method_metadata'
+                          else fact.get('creation_fact'))
+                if (not isinstance(nested, dict)
+                        or nested.get('kind') != 'source_bound_method_metadata_write'
+                        or nested.get('status') != 'source_bound'
+                        or nested.get('attribute') != record['metadata_attribute']
+                        or nested.get('runtime_execution_confirmed') is not False
+                        or not hashes_match(nested) or not assumptions_match(nested)
+                        or not identity(nested.get('target'))
+                        or not witness(nested.get('call_evidence'), nested.get('caller'))):
+                    return False
+                if fact_kind == 'source_ancestor_class_creation_method_metadata':
+                    ancestors = fact.get('ancestor_creation_hooks')
+                    previous = binding.get('class_creation_hooks', ())[:hook_index]
+                    if (not isinstance(ancestors, (list, tuple))
+                            or list(ancestors) != list(previous)
+                            or not any(
+                                nested == query for prior in previous
+                                for query in prior.get('class_metadata_queries', ())
+                                if isinstance(prior, dict))):
+                        return False
+                else:
+                    effect = fact.get('module_effect')
+                    if (not isinstance(effect, dict) or effect.get('status') != 'source_bound'
+                            or fact.get('metadata_write') != nested
+                            or not hashes_match(effect)):
+                        return False
+            else:
+                return False
+            presences.append(record)
+        elif kind == 'source_bound_method_metadata_write':
+            generated = record.get('generated_member_binding')
+            if (record.get('attribute') not in (
+                    '__name__', '__qualname__', '__signature__',
+                    '_autogenerated_signature', '__doc__')
+                    or record.get('value_shape') not in (
+                        'str', 'bool', 'native_inspect_signature', 'source_class_qualname_suffix')
+                    or record.get('runtime_execution_confirmed') is not False
+                    or not identity(record.get('target'))
+                    or not isinstance(generated, dict)
+                    or generated.get('kind') != 'source_class_creation_lambda_member'
+                    or generated.get('status') != 'source_bound'
+                    or generated.get('attribute') != 'set'
+                    or generated.get('receiver_class') != hook.get('receiver_class')
+                    or record.get('definition_evidence') != generated.get('binding_evidence')
+                    or not hashes_match(generated)
+                    or not witness(generated.get('binding_evidence'), hook.get('target'))):
+                return False
+            writes.append(record)
+        elif kind == 'source_matplotlib_set_function_metadata_write':
+            if (record.get('attribute') not in ('__name__', '__qualname__')
+                    or record.get('effect_scope') != 'function_metadata_only'
+                    or record.get('target') != record.get('caller')
+                    or not identity(record.get('target'))
+                    or record['target'].get('module') != 'matplotlib.artist'
+                    or record['target'].get('qualname') != 'Artist.__init_subclass__'
+                    or not hashes_match(record)):
+                return False
+            writes.append(record)
+        elif kind == 'source_matplotlib_class_creation_metadata_only':
+            marker = record.get('metadata_update')
+            if (record.get('effect_scope') != 'set_function_metadata_only'
+                    or not identity(record.get('target'))
+                    or record['target'].get('module') != 'matplotlib.artist'
+                    or record['target'].get('qualname') !=
+                        'Artist._update_set_signature_and_docstring'
+                    or not matplotlib_set_marker(marker, attribute='_autogenerated_signature')
+                    or marker.get('updater') != record.get('target')
+                    or not hashes_match(record)):
+                return False
+            matplotlib_updates.append(record)
+        elif kind == 'source_bound_class_metadata_query':
+            entry, input_binding = record.get('entry_binding'), record.get('input_binding')
+            query = record.get('query')
+            projection_claimed = (isinstance(entry, dict) and
+                'source_private_observer_result_projection' in entry.get('assumptions', ()))
+            if (record.get('result_shape') != 'native_string_list'
+                    or not isinstance(query, dict)
+                    or query.get('status') != 'requires_native_class_metadata'
+                    or query.get('runtime_execution_confirmed') is not False
+                    or 'result' in query or not hashes_match(query)
+                    or not isinstance(entry, dict)
+                    or entry.get('kind') != 'source_native_class_member_query'
+                    or entry.get('status') != 'source_bound'
+                    or entry.get('runtime_target_confirmed') is not False
+                    or not hashes_match(entry)
+                    or not isinstance(input_binding, dict)
+                    or input_binding.get('kind') != 'fresh_source_class_metadata'
+                    or input_binding.get('phase') != 'class_creation_entry'
+                    or input_binding.get('creation_dependency') != 'source_class_creation_prefix'
+                    or not isinstance(input_binding.get('matching_members'), (list, tuple))
+                    or not input_binding['matching_members']
+                    or ('private_query_results' in entry) != projection_claimed
+                    or projection_claimed and not private_projections_match(
+                        entry, record.get('assumptions', ()))):
+                return False
+            setter_queries.append(record)
+        elif kind == 'source_bound_class_documentation_helper':
+            if (record.get('output_shape') != 'str'
+                    or not isinstance(record.get('observer_methods'), (list, tuple))
+                    or not record['observer_methods']
+                    or not isinstance(record.get('observer_queries'), (list, tuple))
+                    or not hashes_match(record)):
+                return False
+            documentation.append(record)
+        else:
+            return False
+    if matplotlib_updates:
+        presence_attributes = {record.get('metadata_attribute') for record in presences}
+        return (len(matplotlib_updates) == 1
+                and presence_attributes in ({'_autogenerated_signature'},
+                    {'_supports_rasterization', '_autogenerated_signature'})
+                and len(presences) == len(presence_attributes)
+                and {record.get('attribute') for record in writes} == {
+                    '__name__', '__qualname__'}
+                and len(writes) == 2
+                and not setter_queries and not documentation)
+    return bool(presences and writes and setter_queries and documentation)
+
+
+def _creation_hook_premises(analysis: Any, binding: dict) -> bool:
+    hooks = binding.get('class_creation_hooks')
+    claims = binding.get('assumptions', ())
+    if not isinstance(claims, (list, tuple)) or any(not isinstance(value, str) for value in claims):
+        return False
+    if hooks is None:
+        return not {'source_class_creation_effects',
+                    'source_class_creation_call_graph',
+                    'source_class_creation_native_queries',
+                    'source_class_creation_callable_metadata_queries'} & set(claims)
+    if not isinstance(hooks, (list, tuple)) or not 1 <= len(hooks) <= 64:
+        return False
+    required = {'source_snapshot_bindings_hold', 'builtin_type_class_creation_protocol',
+                'source_class_creation_effects', 'builtin_type_attribute_writes',
+                'standard_builtin_namespace_preserved', 'no_unmodeled_indirect_builtin_mutation',
+                'no_external_monkeypatch_or_import_hook', 'no_unmodeled_indirect_class_mutation',
+                'no_external_frame_introspection'}
+    seen = set()
+    for hook_index, hook in enumerate(hooks):
+        if not isinstance(hook, dict):
+            return False
+        if not _class_creation_metadata_queries_premises(
+                analysis, binding, hook, hook_index):
+            return False
+        attributes, assumptions = hook.get('attributes'), hook.get('assumptions')
+        receiver, target = hook.get('receiver_class'), hook.get('target')
+        if (not isinstance(receiver, dict) or not isinstance(target, dict)
+                or any(not isinstance(identity.get(field), str) or not identity[field]
+                       for identity in (receiver, target)
+                       for field in ('module', 'qualname', 'file_path'))
+                or not isinstance(target.get('qualname'), str)
+                or not target['qualname'].endswith('.__init_subclass__')
+                or hook.get('kind') != 'source_class_creation_hook'
+                or hook.get('status') != 'source_bound'
+                or hook.get('basis') != 'source_snapshot'
+                or hook.get('phase') != 'before_class_decorators'
+                or hook.get('binding') != 'implicit_classmethod'
+                or hook.get('completion') != 'normal_return_only'
+                or hook.get('preserved_scope') != 'other_class_attributes'
+                or hook.get('runtime_hook_confirmed') is not False
+                or not isinstance(hook.get('parameter'), str) or not hook['parameter']
+                or not isinstance(attributes, (list, tuple)) or len(attributes) > 2000
+                or any(not isinstance(name, str) or not name or name == 'mro'
+                       or name.startswith('__') and name.endswith('__') for name in attributes)
+                or len(set(attributes)) != len(attributes)
+                or not isinstance(assumptions, (list, tuple))
+                or any(not isinstance(value, str) for value in assumptions)
+                or not required.issubset(assumptions) or not set(assumptions).issubset(claims)
+                or not isinstance(hook.get('source_hashes'), dict) or not hook['source_hashes']
+                or not isinstance(binding.get('source_hashes'), dict)
+                or hook.get('source_hashes') != analysis.inputs.get('sha256')
+                or not all(binding.get('source_hashes', {}).get(path) == digest
+                           for path, digest in hook.get('source_hashes', {}).items())):
+            return False
+        if (not _creation_method_premises(hook, binding)
+                or not _creation_query_premises(
+                    hook, analysis.inputs.get('supporting_source_sha256', {}))
+                or not creation_metadata_premises(
+                    hook, analysis.inputs.get('supporting_source_sha256', {}))):
+            return False
+        for field, identity in (('class_evidence', receiver), ('hook_evidence', target)):
+            witness = hook.get(field)
+            if (not isinstance(witness, dict)
+                    or witness.get('file_path') != identity.get('file_path')
+                    or witness.get('lineno') != identity.get('lineno')):
+                return False
+        key = (receiver.get('module'), receiver.get('qualname'),
+               target.get('module'), target['qualname'])
+        if key in seen:
+            return False
+        seen.add(key)
+    return (('source_class_creation_call_graph' in claims) == any(
+        'method_calls' in hook for hook in hooks)
+        and ('source_class_creation_native_queries' in claims) == any(
+            'native_type_queries' in hook for hook in hooks)
+        and ('source_class_creation_callable_metadata_queries' in claims) == any(
+            'callable_metadata_queries' in hook for hook in hooks))
+
+
 def source_constructor_entry_binding(analysis: Any, requested: FunctionIdentity) -> Optional[dict]:
     """Validate a class-query binding separately from an actual call-site proof."""
 
@@ -852,6 +1550,8 @@ def source_constructor_entry_binding(analysis: Any, requested: FunctionIdentity)
     phase = fact.get("phase")
     assumptions = {"source_snapshot_bindings_hold", "builtin_type_call_and_new_binding",
                    "no_external_monkeypatch_or_import_hook", "no_unmodeled_indirect_class_mutation"}
+    source_hashes = {**analysis.inputs.get("sha256", {}),
+                     **analysis.inputs.get("supporting_source_sha256", {})}
     valid = (
         fact.get("query_kind") == "source_class_call" and fact.get("basis") == "source_snapshot"
         and fact.get("status") == "source_bound" and not fact.get("issues")
@@ -869,11 +1569,11 @@ def source_constructor_entry_binding(analysis: Any, requested: FunctionIdentity)
         and all(str(owner.file_path) in hashes for owner in owners)
         and all(isinstance(path, str) and isinstance(digest, str)
                 for path, digest in hashes.items())
-        and all(analysis.inputs.get("sha256", {}).get(path) == digest
-                for path, digest in hashes.items())
+        and all(source_hashes.get(path) == digest for path, digest in hashes.items())
         and Path(evidence.get("file_path", "")) == receiver.file_path
         and evidence.get("lineno") == receiver.lineno
         and assumptions.issubset(fact["assumptions"])
+        and _creation_hook_premises(analysis, fact)
         and any(b.get("reason") == "source_constructor_entry_binding"
                 and b.get("boundary_kind") == "assumption"
                 and b.get("function") == fact["target"] for b in analysis.boundaries)
@@ -940,6 +1640,7 @@ def source_constructor_binding(analysis: Any, call: Any) -> Optional[dict]:
         and all(analysis.inputs.get("sha256", {}).get(path) == digest
                 for path, digest in binding["source_hashes"].items())
         and assumptions.issubset(binding.get("assumptions", ()))
+        and _creation_hook_premises(analysis, binding)
         and any(b.get("call_id") == call.id
                 and b.get("reason") == "source_constructor_" + phase.strip("_") + "_binding"
                 and b.get("boundary_kind") == "assumption"

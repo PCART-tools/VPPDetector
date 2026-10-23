@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 from dataclasses import asdict, dataclass, fields, is_dataclass
 
@@ -53,6 +54,30 @@ def _digest(path):
         return None
 
 
+def _source_digests(path):
+    """Read once while retaining both byte and flow-text source identities."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None, None
+    raw_digest = hashlib.sha256(raw).hexdigest()
+    try:
+        # Match open(..., encoding="utf-8-sig") with universal-newline
+        # translation, which is the existing flow digest policy.
+        text = raw.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeError:
+        return raw_digest, None
+    return raw_digest, hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _flow_digest(path):
+    try:
+        with open(path, encoding='utf-8-sig') as stream:
+            return hashlib.sha256(stream.read().encode('utf-8')).hexdigest()
+    except (OSError, UnicodeError):
+        return None
+
+
 class PCResolveAdapter:
     """Keep source-only immutable facts; all domain query state stays outside."""
 
@@ -61,8 +86,11 @@ class PCResolveAdapter:
             from pcresolve import FlowAnalyzer, FlowCall
         except ImportError as exc:
             raise ResolutionError("PCResolve value-flow analysis is required") from exc
+        options = {}
+        if 'support_source_protocols' in inspect.signature(FlowAnalyzer).parameters:
+            options['support_source_protocols'] = True
         self._analyzer = FlowAnalyzer(source_files=index.files,
-                                      import_roots=index.source.import_roots)
+                                      import_roots=index.source.import_roots, **options)
         self._import_roots = tuple(_path(path) for path in self._analyzer.roots)
         self.capabilities = FactCapabilities("flow-0.2", tuple(
             item.name for item in fields(FlowCall)) if is_dataclass(FlowCall) else ())
@@ -71,18 +99,44 @@ class PCResolveAdapter:
         # Only a full package snapshot can promise detection of added files.
         self._full_package = (not index.is_api_scope and
                               tuple(_python_files(index.source.package_root)) == index.files)
-        self._source_hashes = {path: _digest(path) for path in index.files}
+        self._source_hashes = {}
         self._flow_hashes = {}
         for path in index.files:
-            try:
-                with path.open(encoding="utf-8-sig") as stream:
-                    text = stream.read()
-            except (OSError, UnicodeError):
-                continue
-            self._flow_hashes[_path(path)] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            raw_digest, flow_digest = _source_digests(path)
+            self._source_hashes[path] = raw_digest
+            if flow_digest is not None:
+                self._flow_hashes[_path(path)] = flow_digest
         self._analysis_cache = {}
         self._expansion_cache = {}
         self._caller_store = None
+        self._supporting_hashes = {}
+
+    def _validate_supporting_sources(self):
+        if any(_flow_digest(path) != digest for path, digest in self._supporting_hashes.items()):
+            raise ValueError('Source protocol content changed; create a new analysis context')
+
+    def _register_supporting_sources(self, hashes):
+        if (not isinstance(hashes, dict)
+                or any(not isinstance(path, str) or not os.path.isabs(path)
+                       or not isinstance(digest, str) or len(digest) != 64
+                       or any(char not in '0123456789abcdef' for char in digest)
+                       or _path(path) in self._flow_hashes
+                       for path, digest in hashes.items())):
+            raise ResolutionError('PCResolve supporting source snapshot is malformed',
+                                  'pcresolve_fact_contract_unavailable')
+        for path, digest in hashes.items():
+            normalized = _path(path)
+            if not any(os.path.commonpath([normalized, root]) == root
+                       for root in self._import_roots
+                       if os.path.splitdrive(normalized)[0] == os.path.splitdrive(root)[0]):
+                raise ResolutionError(
+                    'PCResolve supporting source is outside supplied import roots',
+                    'pcresolve_fact_contract_unavailable')
+            if (_flow_digest(path) != digest
+                    or normalized in self._supporting_hashes
+                    and self._supporting_hashes[normalized] != digest):
+                raise ValueError('Source protocol content changed; create a new analysis context')
+        self._supporting_hashes.update({_path(path): digest for path, digest in hashes.items()})
 
     def caller_inputs(self, callsite):
         """Read optional caller facts independently of cached library flow/scan."""
@@ -96,7 +150,11 @@ class PCResolveAdapter:
             self._caller_store = SourceStore()
         span = SourceSpan(str(callsite.file_path), callsite.lineno, callsite.col_offset,
                           callsite.end_lineno, callsite.end_col_offset)
-        return readonly(literal_inputs(span, store=self._caller_store))
+        fact = literal_inputs(span, store=self._caller_store, import_roots=self._import_roots)
+        supporting = fact.get('supporting_source_sha256', {}) if isinstance(fact, dict) else {}
+        if supporting:
+            self._register_supporting_sources(supporting)
+        return readonly(fact)
 
     def validate_source(self):
         """Validate once per public query, including before a domain cache hit."""
@@ -106,6 +164,7 @@ class PCResolveAdapter:
             raise ValueError("Source files changed; create a new analysis context")
         if any(_digest(path) != digest for path, digest in self._source_hashes.items()):
             raise ValueError("Source content changed; create a new analysis context")
+        self._validate_supporting_sources()
 
     def _validate(self, analysis):
         missing = [name for name in ("entry", "inputs", "functions", "calls", "boundaries")
@@ -144,10 +203,12 @@ class PCResolveAdapter:
                        for path, digest in hashes.items())):
             raise ResolutionError("PCResolve fact contract unavailable: source snapshot mismatch",
                                   "pcresolve_fact_contract_unavailable")
+        self._register_supporting_sources(inputs.get('supporting_source_sha256', {}))
 
     def analyze(self, function, max_depth=1, *, conditional_source_state=False):
         from pcresolve import FunctionRef
 
+        self._validate_supporting_sources()
         key = ((function, max_depth, 'conditional_source_state')
                if conditional_source_state else (function, max_depth))
         if key not in self._analysis_cache:
@@ -170,14 +231,21 @@ class PCResolveAdapter:
         self._analysis_cache[key] = readonly(self._analysis_cache[key])
         return self._analysis_cache[key]
 
-    def expand(self, analysis, call_id, *, isolate=False):
-        key = (id(analysis), call_id, 'isolated') if isolate else (id(analysis), call_id)
+    def expand(self, analysis, call_id, *, isolate=False, preserve_lineage=False):
+        if type(isolate) is not bool or type(preserve_lineage) is not bool:
+            raise ValueError('Expansion isolation options must be bool')
+        if preserve_lineage and not isolate:
+            raise ValueError('preserve_lineage requires isolate=True')
+        self._validate_supporting_sources()
+        key = ((id(analysis), call_id, 'isolated', 'lineage') if preserve_lineage else
+               (id(analysis), call_id, 'isolated') if isolate else (id(analysis), call_id))
         if key not in self._expansion_cache:
             self._validate(analysis)
             try:
                 if isolate:
-                    result = self._analyzer.expand(analysis, call_id, additional_depth=1,
-                                                   isolate=True)
+                    result = self._analyzer.expand(
+                        analysis, call_id, additional_depth=1, isolate=True,
+                        preserve_lineage=preserve_lineage)
                 else:
                     result = self._analyzer.expand(analysis, call_id, additional_depth=1)
             except (KeyError, RuntimeError, StopIteration, ValueError, TypeError) as exc:

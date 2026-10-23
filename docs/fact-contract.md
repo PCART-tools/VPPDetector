@@ -254,6 +254,87 @@ an unknown class query, callback, side effect or normally returning handler.
 
 ## Source API alias selection
 
+Assess may discharge `dynamic_method_override_possible` using one matching
+`fresh_source_instance_method` fact. It checks the original class-entry allocation,
+finite invocation path, source hashes, exact call and target, receiver origin,
+per-incoming-context bindings and explicit lookup-prefix assumptions. This does
+not upgrade nominal receiver types or establish arbitrary initialized state.
+An allocation with `frame_observation="native_metadata_only"` additionally
+requires the complete shared frame/namespace observation guard. Assess validates
+its source witnesses, metadata-only fields, hashes and inherited assumptions;
+missing or inconsistent evidence cannot discharge receiver override uncertainty.
+This reuses the producer's observation proof and supplies no runtime receiver
+observation or general callback-purity guarantee.
+Native `traceback.walk_stack(None)` records require the additional producer
+premise `standard_traceback_frame_iteration_protocol`. They permit guarded
+metadata reads during direct frame/line iteration and cannot authorize arbitrary
+traceback traversal or frame-object escape.
+These requirements also apply to observation guards embedded in class-creation
+callable metadata queries; `global_keys` must name only `__name__` when a frame's
+global dictionary is read, and must otherwise be empty.
+For a `fresh_mapping_member_check`, assess additionally requires the complete
+one-item builtin dictionary at that exact checker entry. It matches the neutral
+source guard evidence, allocation path and finite member namespace. A nondunder
+attribute absent from both source and own dictionaries establishes the source
+rejection. A checked plain setter store can establish value consumption. Multiple
+items, unknown setter effects or incomplete evidence retain unknown; runtime
+keyword observations are separate and cannot substitute for these proofs.
+
+The producer may include `factory_binding` within a closed
+`source_class_decoration` for a literal `functools.partial` class-decorator
+factory. Constructor admission still requires the complete ordinary
+constructor-entry proof, source hashes and assumptions. A partial-application
+binding by itself cannot authorize an undecided class decorator, source alias
+generator, creation hook or initializer body.
+Likewise, `literal_loop_expansion` is supporting producer evidence for finite
+literal table iteration. Assess does not execute or infer alias-generation
+semantics from an expansion count. Unproved generated method/descriptor effects
+must still prevent the ordinary constructor-entry proof.
+
+`deferred_functions` can support that producer proof for local source-function
+creation and bounded metadata/class stores. Its scope is class decoration only;
+future method bodies remain unmodeled. Assess cannot treat a created or stored
+function as a literal field, an executed helper or a safe later class lookup.
+Evaluated decorators/defaults, escaped closures and immediate invocation of a
+stored closure still require their own effects and binding evidence.
+
+Assess can additionally consume PCResolve's `fresh_function_decorations`
+alternative when ordinary documentation analysis remains open. It checks the
+exact original declaration, creation before name binding, no function escape,
+full source hashes, source frame/namespace guards and their assumptions. The
+only additional formatting obligation is native string/dictionary formatting
+whose cache predates the input function, with no function object passed to the
+callback. Its dictionary method and cache construction must agree. Ordinary
+source helper/binding checks still apply after that operation. The alternative
+does not establish a documentation value, callback purity, import completion or
+original-call success, and it cannot authorize missing or changed prerequisites.
+
+Default standard `functools.wraps` can appear in this evidence only with the
+producer's plain-function metadata and stable-namespace premises. A literal-name
+class lookup additionally requires its source MRO, namespace formation, prefix
+writes and function-escape checks. Unproved creation hooks, descriptors or copy
+options remain boundaries. This supports constructor-slot preservation during
+decoration; assess cannot use it as an alias-body execution or consumption proof.
+
+Constructor bindings may additionally carry `class_creation_hooks`, separate
+from class decorators. Assess checks the producer's source creation protocol,
+`before_class_decorators` phase, class/hook evidence, bounded nonstructural
+writes, full source hashes and inherited assumptions. Fresh allocation evidence
+must carry the same hook records as its constructor entry. Their possible writes
+join the static member namespace and invalidate overwritten method/setter or
+plain-field-store claims; they never establish a runtime member value. Missing
+hook evidence cannot retain its `source_class_creation_effects` assumption.
+Unproved class creation callbacks and cooperative super effects still prevent
+constructor admission.
+
+Creation-hook `method_calls` require the matching
+`source_class_creation_call_graph` premise. Assess validates a finite, rooted,
+acyclic source graph, source identities and spans, the same new class receiver,
+exact builtin classmethod binding, implicit-receiver-only arguments and
+conditional normal returns. Callee writes are already included in the hook's
+possible class slots. A missing graph, changed dispatch or unrelated caller
+cannot retain this premise; no library-specific classmethod rule is inferred.
+
 PCResolve can supply `inputs.entry_alias` for a captured plain source function.
 The common API resolver checks its requested identity, original function,
 assignment chain and spans, fixed source hashes, assumptions and conditional
@@ -281,5 +362,83 @@ result, dependency scope and every incoming context. Unknown/custom callable
 objects retain a boundary. A selected scalar object may be inspected through
 this protocol. Checking a capture tuple/dict's type does not inspect its selected
 elements, so the result carries no element-consumption marker.
+
+For a closed, identity/body-preserving function-decoration proof, assess also
+accepts `attribute_write` / `module_metadata` on exactly `__module__`. It requires
+the `builtin_function_module_attribute` protocol and assumption, a nonempty
+list of only `str`/`NoneType` value shapes, `execution_fields_unchanged=true`, and
+`runtime_write_confirmed=false`. Missing or mismatched fields add no proof.
+This discharges decoration binding only; code reading that metadata still needs
+its own analysis and cannot inherit a literal value from this record.
 Likewise, checking the fixed builtin type of a derived comparison/length result
 does not consume the value or presence that produced that temporary result.
+Class-creation facts may additionally carry bounded `native_type_queries`.
+Each query must identify its actual hook/classmethod caller, implicit class
+receiver, pre-decoration phase and call span. Its source protocol must prove
+native `iter`/`TypeError` bindings, the complete helper-body shape, preserved
+decorator execution binding, matching Boolean result and absence of input
+mutation for an exact native `type` metaclass. The consumer checks declaration
+and reexport paths, source witnesses, snapshot hashes and propagation of all
+assumptions through the hook and constructor facts. Missing or inconsistent
+premises leave the constructor query unknown. The adapter explicitly opts in
+when PCResolve supports separately versioned dependency protocols. Supporting
+files must lie under the supplied import roots, remain outside the primary
+source map and appear in `inputs.supporting_source_sha256`. Protocol premises
+must contain the complete primary scope and all of their own referenced
+dependency versions. The adapter rereads supporting versions before cached
+analysis, expansion, scan or assess results can be reused; edits and missing
+files require a new context. Other dependency files never become callable flow
+targets through this option. Older producers retain the primary-only behavior.
+Scan and assess
+consume the same facts while retaining independent verdicts and query caches.
+An individual decorator subproof may cover only its own supporting files; every
+recorded hash must match the complete protocol snapshot, and the subproof must
+identify the same helper function.
+
+Class-creation hooks may additionally carry `callable_metadata_queries`. Each
+record must instantiate a conditional `source_callable_metadata_query` for a
+fresh source function owned by the class before class decoration. The consumer
+checks actual caller, helper entry, function/member identity, source spans,
+complete primary hashes, callback-free signature/documentation protocols,
+source observation guards and assumption propagation. Documentation queries
+currently require native string documentation with source docstrings preserved.
+Possible native cache retention remains explicit. Missing, altered or
+inconsistent input/effect/cache premises cannot establish constructor binding.
+Query result shapes carry no concrete answer, and writes to the input member
+invalidate their use. Scan and assess share these source facts; neither acquires
+a concrete caller condition from a scalar-query template alone.
+
+A helper entry depending on `private_query_results` is currently outside this
+scalar-query consumer. Its `source_private_observer_result_projection` claim
+requires a separate lifetime/input proof reader; either the proof field or its
+claim keeps constructor binding unconfirmed until that reader is implemented.
+
+The same rule applies to PCResolve `class_metadata_queries` and the
+`source_creation_phase_class_metadata_input` claim. These require a class-wide
+namespace, generated-member and private observer lifetime reader. The scalar
+query reader does not approve them implicitly; either field or claim keeps the
+constructor binding unconfirmed until that consumer is implemented.
+
+`signature_creations` has a separate native construction reader. It validates
+source spans, hashes, constructor protocols and assumption propagation. A source
+marker default requires its allocation and module-binding evidence and permits
+opaque reference storage only; it supplies no concrete value or callback-free
+comparison. Missing or inconsistent construction records cannot approve binding.
+
+Assess may consume `source_wrapper_forwarding` for a concrete invocation through
+a source factory wrapper. It checks the original function, factory and wrapper
+spans, same-argument forwarding call, native metadata construction, observation
+guard, supporting hashes and assumptions. Actual positional count includes an
+implicit receiver only when the invocation is bound. An optional maximum count
+must hold; other wrapper paths remain unknown. A displayed `__signature__` does
+not authorize execution binding. Discharging this condition permits assessment
+of that invocation's original body; it does not change the producer's replaced
+callable identity or generic unmodeled-body fact. Scan retains the generic
+decorator boundary and receives no call-specific assessment state.
+
+A fresh receiver may carry `class_decorations` matching its constructor entry.
+The consumer checks normal identity preservation, bounded class-slot writes,
+source hashes and assumption propagation. These writes join creation-hook
+writes when validating method paths and missing setter obligations. Missing or
+inconsistent decoration records cannot approve a method lookup; a written slot
+cannot reuse its old source body or an absent-attribute proof.
