@@ -216,10 +216,48 @@ def scan_function(
                 continue
             candidates = candidate_identities(call)
             selected = identity_from_target(call.target) if call.target else None
+            allocated_classes = tuple(dict.fromkeys(
+                identity_from_target(candidate)
+                for source in getattr(call, "receiver_sources", ())
+                if isinstance(source, dict)
+                and source.get("kind") == "call_result"
+                and source.get("relation") == "direct"
+                and not source.get("projection") and not source.get("output_path")
+                and source.get("evidence")
+                for candidate in source.get("instance_candidates", ())
+                if isinstance(candidate, dict)
+                and candidate.get("module") and candidate.get("qualname")
+                and candidate.get("file_path") and candidate.get("lineno")
+            ))
+            method_name = call.callee_name.rsplit(".", 1)[-1]
+            allocation_candidates = tuple(dict.fromkeys(
+                function.identity
+                for owner in allocated_classes
+                if owner is not None and owner in context.index.classes
+                for function in context.index.functions
+                if function.identity.module == owner.module
+                and function.identity.qualname.startswith(owner.qualname + ".")
+                and function.identity.qualname.rsplit(".", 1)[-1] == method_name
+                and "." not in function.identity.qualname[len(owner.qualname) + 1:]
+            ))
+            if allocation_candidates and any(
+                    source.get("value_incomplete")
+                    or source.get("attribute_provenance")
+                    for source in getattr(call, "receiver_sources", ())
+                    if isinstance(source, dict)):
+                boundaries.append(AnalysisBoundary(
+                    "pcresolve_class_attribute_state_unknown",
+                    "PCResolve identifies a possible allocated class, but class attribute state "
+                    "or alternative receiver types remain incomplete.",
+                    identity,
+                    call_span(call),
+                ))
             targets = (
                 (selected,)
                 if selected and call.target_status == "resolved"
-                else tuple(dict.fromkeys(((selected,) if selected else ()) + candidates))
+                else tuple(dict.fromkeys(
+                    ((selected,) if selected else ()) + candidates + allocation_candidates
+                ))
             )
             if any(boundary.get("call_id") == call.id
                    and boundary.get("reason") == "callable_identity_incomplete"

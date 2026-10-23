@@ -117,6 +117,7 @@ class _Value:
     consumed: bool = False
     type_selected: bool = False
     iterable: Optional[bool] = None
+    derived: bool = False
 
 
 @dataclass
@@ -231,6 +232,52 @@ def _key_presence(value: Any) -> bool:
     if isinstance(value, _Value):
         return value.key_presence
     return isinstance(value, (_Keywords, _KeySet)) and _tracked(value)
+
+
+def _class_binding_may_escape(context, class_identity):
+    """Detect source uses that can expose a class object to arbitrary code."""
+    if class_identity is None or not class_identity.file_path:
+        return False
+    try:
+        with tokenize.open(class_identity.file_path) as stream:
+            tree = ast.parse(stream.read())
+    except (OSError, SyntaxError, UnicodeError):
+        return False
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    name = class_identity.qualname.rsplit(".", 1)[-1]
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Name) or node.id != name:
+            continue
+        parent = parents.get(node)
+        if isinstance(parent, ast.Call):
+            if parent.func is node:
+                continue  # Constructing an instance does not expose the class object.
+            if (node in parent.args and len(parent.args) >= 2
+                    and parent.args[1] is node and isinstance(parent.func, ast.Name)
+                    and parent.func.id in {"isinstance", "issubclass"}):
+                owner = next((item for item in ast.walk(tree)
+                              if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                              and item.lineno <= node.lineno <= item.end_lineno), None)
+                shadowed = bool(owner and (
+                    any(arg.arg == parent.func.id for arg in (
+                        *owner.args.posonlyargs, *owner.args.args, *owner.args.kwonlyargs,
+                        *((owner.args.vararg,) if owner.args.vararg else ()),
+                        *((owner.args.kwarg,) if owner.args.kwarg else ())))
+                    or any(isinstance(item, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+                           and any(isinstance(target, ast.Name)
+                                   and target.id == parent.func.id
+                                   for target in ast.walk(item))
+                           for item in ast.walk(owner))))
+                if not shadowed:
+                    continue
+            return True
+        if isinstance(parent, ast.Attribute) and parent.value is node:
+            if parent.attr not in {"__dict__", "__bases__", "__mro__", "__subclasses__"}:
+                continue  # A named method/attribute lookup keeps only the member reference.
+        if isinstance(parent, ast.ClassDef) and node in parent.bases:
+            continue  # Inheritance does not expose the class object as a value.
+        return True
+    return False
 
 
 def _finite(node: ast.AST) -> _Value:
@@ -683,6 +730,19 @@ class _Proof:
                 function.query_class or function.query_alias or function.identity)
         except ResolutionError as exc:
             self.unknown(function, exc.code, str(exc))
+        owner_name = function.identity.qualname.rpartition(".")[0]
+        owner_class = next((item for item in self.context.index.classes
+                            if item.module == function.identity.module
+                            and item.qualname == owner_name), None)
+        if (owner_class is not None
+                and function.identity.qualname.endswith(".__init__")
+                and analysis.inputs.get("entry_binding", {}).get("phase") == "__init__"
+                and _class_binding_may_escape(self.context, owner_class)):
+            self.unknown(
+                function, "source_class_binding_may_escape",
+                "Source code can expose this class object to an unmodeled callable; its "
+                "class members may change before the assessed constructor call.",
+            )
         if (not fresh_receiver and function.query_class is not None
                 and analysis.inputs.get('entry_binding', {}).get('phase') == '__init__'):
             receiver_facts = [fresh_method_binding(analysis, call, self.context)
@@ -1184,14 +1244,16 @@ class _Frame:
                         )
                         positional = (self.function.node.args.posonlyargs
                                       + self.function.node.args.args)
-                        if (self.fresh_receiver and _tracked(result)
+                        if (self.fresh_receiver and isinstance(result, _Value)
+                                and _tracked(result)
                                 and isinstance(target, ast.Attribute)
                                 and isinstance(target.value, ast.Name)
                                 and positional and target.value.id == positional[0].arg
                                 and target.attr in {'__class__', '__dict__'}):
                             self.unknown('fresh_receiver_special_attribute_mutation_unproven',
                                          statement)
-                        if (self.fresh_receiver and _tracked(result)
+                        if (self.fresh_receiver and isinstance(result, _Value)
+                                and _tracked(result)
                                 and isinstance(target, ast.Attribute)
                                 and isinstance(target.value, ast.Name)
                                 and positional and target.value.id == positional[0].arg
@@ -1233,13 +1295,24 @@ class _Frame:
                         continue
                     if isinstance(self.values.get(target.id), _LocalFunction):
                         self.unknown("local_callable_rebinding", statement)
+                    if isinstance(result, _Value) and result.tracked and result.consumed:
+                        self.proof.consumed_values.append(result)
+                        self.proof.handled(
+                            self.function, "consumed_value",
+                            "The selected value was consumed by a supported exact operation.",
+                            statement,
+                        )
                     self.values[target.id] = result
                     # A reassignment invalidates trusted receiver/parameter facts too.
                     for name in tuple(self.facts):
                         if name == target.id or name.startswith(target.id + "."):
                             del self.facts[name]
             elif isinstance(statement, ast.Expr):
-                self.expression(statement.value)
+                result = self.expression(statement.value)
+                if (self.proof.consumption_witness is not None
+                        and isinstance(result, _Value) and result.tracked
+                        and not result.consumed):
+                    self.proof.consumed_values.append(result)
             elif isinstance(statement, (ast.Import, ast.ImportFrom)):
                 binding = cached_import_binding(self.analysis, self.function, statement)
                 if binding is None:
@@ -1606,7 +1679,8 @@ class _Frame:
                     self.unknown('sequence_membership_unproven', node)
                 present = lval in tuple(item.literal for item in right.items)
                 return _Value(present if isinstance(operation, ast.In) else not present,
-                              _tracked(left) or _tracked(right))
+                              _tracked(left) or _tracked(right),
+                              derived=_tracked(left) or _tracked(right))
             if (isinstance(operation, (ast.Eq, ast.NotEq))
                     and isinstance(left, _Keywords) and isinstance(right, _Keywords)
                     and (not left.items or not right.items)):
@@ -1615,7 +1689,7 @@ class _Frame:
                 equal = not left.items and not right.items
                 selected = _tracked(left) or _tracked(right)
                 return _Value(equal if isinstance(operation, ast.Eq) else not equal,
-                              selected, selected)
+                              selected, selected, derived=selected)
             if isinstance(operation, (ast.In, ast.NotIn)) and isinstance(right, _Keywords):
                 if lval is not _UNKNOWN:
                     present = lval in right.items
@@ -1624,14 +1698,17 @@ class _Frame:
                         present if isinstance(operation, ast.In) else not present,
                         tracked,
                         _tracked(right.items.get(lval)),
+                        derived=tracked,
                     )
             if lval is not _UNKNOWN and rval is not _UNKNOWN:
                 if isinstance(operation, (ast.Is, ast.IsNot)) and (lval is None or rval is None):
                     result = lval is rval
-                    return _Value(result if isinstance(operation, ast.Is) else not result, tracked)
+                    return _Value(result if isinstance(operation, ast.Is) else not result,
+                                  tracked, derived=tracked)
                 if isinstance(operation, (ast.Eq, ast.NotEq)):
                     result = lval == rval
-                    return _Value(result if isinstance(operation, ast.Eq) else not result, tracked)
+                    return _Value(result if isinstance(operation, ast.Eq) else not result,
+                                  tracked, derived=tracked)
                 numeric = type(lval) in (bool, int, float) and type(rval) in (bool, int, float)
                 text = type(lval) is type(rval) and type(lval) in (str, bytes)
                 comparison = {
@@ -1639,7 +1716,7 @@ class _Frame:
                     ast.Gt: operator.gt, ast.GtE: operator.ge,
                 }.get(type(operation))
                 if comparison is not None and (numeric or text):
-                    return _Value(comparison(lval, rval), tracked)
+                    return _Value(comparison(lval, rval), tracked, derived=tracked)
             return _Value(tracked=tracked)
         if self.related(node):
             self.unknown("unsupported_value_use", node)
@@ -2013,7 +2090,11 @@ class _Frame:
                                 'This exact builtin input type has no call protocol.', node)
                 # Exact carrier type is independent of its selected payload
                 # or element presence. Only a selected object itself is read.
-                return _Value(False, _tracked(value), _key_presence(value), consumed=True)
+                selected_object = (
+                    isinstance(value, _Value) and value.tracked
+                    and not value.consumed and not value.key_presence and not value.derived
+                )
+                return _Value(False, selected_object, consumed=selected_object)
             self.unknown('callability_input_unproven', node)
         length_protocol = container_length_protocol(self.analysis, facts) if facts else None
         if length_protocol is not None and len(positional) == 1 and not keywords:

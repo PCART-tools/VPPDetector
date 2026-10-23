@@ -875,9 +875,23 @@ def conditional_path_conditions(analysis, call, target, flow):
     paths = getattr(call, 'candidate_paths', ())
     if not isinstance(paths, (list, tuple)) or len(paths) > 128:
         return None
-    if (any(value.get('instance_candidate_contexts') for value in call.receiver_sources)
-            and not paths):
-        return None
+    candidate_contexts = []
+    if not paths:
+        target_owner, _, _ = target.qualname.rpartition('.')
+        for source in getattr(call, 'receiver_sources', ()):
+            if not isinstance(source, dict):
+                continue
+            declared = {identity_from_target(item)
+                        for item in source.get('instance_candidates', ())}
+            for context in source.get('instance_candidate_contexts', ()):
+                owner = identity_from_target(context.get('instance_type')) \
+                    if isinstance(context, dict) else None
+                predicates = context.get('conditions') if isinstance(context, dict) else None
+                if (owner is not None and owner.qualname == target_owner
+                        and owner == next((item for item in declared if item == owner), None)
+                        and isinstance(predicates, (list, tuple))
+                        and all(isinstance(item, dict) for item in predicates)):
+                    candidate_contexts.append(tuple(predicates))
     if paths:
         if any(not isinstance(path, dict) or not isinstance(path.get('conditions'), (list, tuple))
                or len(path['conditions']) > 128 for path in paths):
@@ -888,6 +902,15 @@ def conditional_path_conditions(analysis, call, target, flow):
         if not compatible:
             return None
         conditions += list(compatible[0].get('conditions', ()))
+    elif any(source.get('instance_candidate_contexts')
+             for source in getattr(call, 'receiver_sources', ()) if isinstance(source, dict)):
+        if not candidate_contexts or not all(
+                consistent_conditions(conditions + list(candidate))
+                for candidate in candidate_contexts):
+            return None
+        for item in candidate_contexts[0]:
+            if item not in conditions:
+                conditions.append(item)
     result = []
     for condition in conditions:
         if condition not in result:

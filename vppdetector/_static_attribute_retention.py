@@ -8,6 +8,56 @@ from pathlib import Path
 from ._program_facts import identity_from_target, source_constructor_entry_binding
 
 
+def _method_node(path, identity):
+    try:
+        with open(path, encoding="utf-8-sig") as stream:
+            tree = ast.parse(stream.read(), filename=path)
+    except (OSError, SyntaxError, UnicodeError):
+        return None
+    matches = [node for node in ast.walk(tree)
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and node.name == identity.qualname.rsplit(".", 1)[-1]
+               and node.lineno == identity.lineno]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _attribute_path(node, receiver, attribute):
+    return (isinstance(node, ast.Attribute) and node.attr == attribute
+            and isinstance(node.value, ast.Name) and node.value.id == receiver)
+
+
+def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_line):
+    """Reject a retention claim if checked source methods can invalidate its field."""
+    for target in checked:
+        method = _method_node(target.file_path, target)
+        if method is None:
+            return True
+        for node in ast.walk(method):
+            if (target.qualname.endswith(".__init__")
+                    and getattr(node, "lineno", store_line + 1) <= store_line):
+                continue
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(_attribute_path(item, receiver, attribute)
+                       for target_node in targets for item in ast.walk(target_node)):
+                    return True
+            if isinstance(node, ast.Delete) and any(
+                    _attribute_path(item, receiver, attribute)
+                    for target_node in node.targets for item in ast.walk(target_node)):
+                return True
+            if isinstance(node, ast.Call):
+                if (isinstance(node.func, ast.Attribute)
+                        and _attribute_path(node.func.value, receiver, attribute)
+                        and node.func.attr in {"clear", "pop", "popitem", "update",
+                                               "setdefault", "__setitem__", "__delitem__"}):
+                    return True
+                if any(_attribute_path(item, receiver, attribute)
+                       for argument in [*node.args, *(kw.value for kw in node.keywords)]
+                       for item in ast.walk(argument)):
+                    return True
+    return False
+
+
 def retained_store(analysis, function, statement, destination, mapping_capture=None):
     """Match a scalar or unchanged keyword-capture store to a source witness."""
     if function.query_class is None or not isinstance(destination, ast.Attribute):
@@ -63,5 +113,8 @@ def retained_store(analysis, function, statement, destination, mapping_capture=N
                     "lineno", "col_offset", "end_lineno", "end_col_offset"))):
             return None
     except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if _later_mutation_is_possible(
+            analysis, methods, receiver, destination.attr, statement.lineno):
         return None
     return fact
