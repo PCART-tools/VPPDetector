@@ -2094,7 +2094,13 @@ class _Frame:
                     isinstance(value, _Value) and value.tracked
                     and not value.consumed and not value.key_presence and not value.derived
                 )
-                return _Value(False, selected_object, consumed=selected_object)
+                # Calling builtin ``callable`` on an exact builtin value can
+                # consume its value while the result still depends on whether
+                # that selected value came from a tracked keyword. Keep those
+                # facts separate: downstream ``if not callable(value)`` guards
+                # must remain tied to the original keyword presence.
+                return _Value(False, selected_object, _key_presence(value),
+                              consumed=selected_object)
             self.unknown('callability_input_unproven', node)
         length_protocol = container_length_protocol(self.analysis, facts) if facts else None
         if length_protocol is not None and len(positional) == 1 and not keywords:
