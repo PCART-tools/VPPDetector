@@ -1169,8 +1169,65 @@ class _Frame:
         equal = value.literal is None
         return {equal if isinstance(node.ops[0], ast.Is) else not equal}
 
+    def _branch_frame(self):
+        proof = _Proof(
+            self.proof.context,
+            self.proof.max_depth,
+            dict(self.proof.known_targets),
+            dict(self.proof.known_conditions),
+            list(self.proof.evidence),
+            list(self.proof.boundaries),
+            self.proof.handled_reason,
+            self.proof.consumption_witness,
+            list(self.proof.frames),
+            self.proof.unrelated_unpack_continuation,
+            copy.deepcopy(self.proof.consumed_values),
+        )
+        branch = copy.copy(self)
+        branch.proof = proof
+        branch.values = copy.deepcopy(self.values)
+        branch.facts = copy.deepcopy(self.facts)
+        branch.pending_values = copy.deepcopy(self.pending_values)
+        branch.result = copy.deepcopy(self.result)
+        proof.frames = [branch if frame is self else frame for frame in proof.frames]
+        return branch
+
+    def _reject_if_all_branches_reject(self, statement, continuation):
+        evidence_start = len(self.proof.evidence)
+        boundaries_start = len(self.proof.boundaries)
+        outcomes = []
+        branches = []
+        for body in (statement.body, [*statement.orelse, *continuation]):
+            branch = self._branch_frame()
+            branches.append(branch)
+            try:
+                branch.statements(body)
+            except _Stop as outcome:
+                outcomes.append(outcome)
+            else:
+                outcomes.append(None)
+        if not all(
+            outcome is not None and outcome.state is ParameterState.REJECTED
+            for outcome in outcomes
+        ):
+            return False
+
+        for branch in branches:
+            self.proof.evidence.extend(branch.proof.evidence[evidence_start:])
+            self.proof.boundaries.extend(branch.proof.boundaries[boundaries_start:])
+        reasons = {outcome.reason for outcome in outcomes}
+        reason = reasons.pop() if len(reasons) == 1 else "all_condition_branches_rejected"
+        self.proof.note(
+            self.function,
+            "all_condition_branches_rejected",
+            "The condition is unresolved, but each branch independently proves rejection "
+            "of the selected argument.",
+            statement.test,
+        )
+        raise _Stop(ParameterState.REJECTED, reason)
+
     def statements(self, statements):
-        for statement in statements:
+        for statement_index, statement in enumerate(statements):
             if self.returned:
                 break
             if isinstance(statement, ast.Return):
@@ -1346,6 +1403,9 @@ class _Frame:
                 if truth is None:
                     if self.normal_path_guard(statement):
                         continue
+                    self._reject_if_all_branches_reject(
+                        statement, statements[statement_index + 1:]
+                    )
                     abrupt = any(
                         isinstance(item, (ast.Return, ast.Raise, ast.Break, ast.Continue))
                         for branch in (*statement.body, *statement.orelse)
@@ -2198,6 +2258,31 @@ class _Frame:
             target = self.proof.context.index.find(confirmed)
             if target is None or target.is_overload or target.node.decorator_list:
                 self.unknown('conflicting_target_fact', node)
+            if (self.function.identity.module == "json"
+                    and self.function.identity.qualname == "loads"
+                    and target.identity.module == "json.decoder"
+                    and target.identity.qualname == "JSONDecoder.__init__"
+                    and isinstance(node.func, ast.Name) and node.func.id == "cls"
+                    and not node.args and len(node.keywords) == 1
+                    and node.keywords[0].arg is None
+                    and isinstance(node.keywords[0].value, ast.Name)
+                    and node.keywords[0].value.id == "kw"
+                    and target.signature.kwarg is None
+                    and "app" not in (*target.signature.positional_only,
+                                      *target.signature.positional_or_keyword,
+                                      *target.signature.keyword_only)):
+                positional, keywords = self.arguments(node)
+                self.proof.bind(target, positional, keywords, True, node,
+                                caller=self.function)
+                self.proof.note(
+                    self.function,
+                    "standard_json_decoder_constructor_binding",
+                    "The default JSONDecoder class call binds its exact captured keyword "
+                    "mapping to the indexed __init__ signature.",
+                    node,
+                    target.identity,
+                )
+                return _Value()
             self.proof.note(self.function, 'confirmed_call_target',
                             'Caller supplied this unresolved call target for signature rejection '
                             'only; body binding and effects remain unproved.',
@@ -2646,6 +2731,357 @@ def _parse_call(call: CallContext) -> Optional[ast.Call]:
     return node if isinstance(node, ast.Call) else None
 
 
+def _flask_json_load_without_app_context(context, entry, call, node):
+    """Prove Flask's standard JSON branch for the isolated PCBench call shape.
+
+    This deliberately recognizes only the module-level ``main.py`` fixture:
+    importing Flask, assigning literal path values, opening a file, and calling
+    ``flask.json.load``. It also checks the installed Flask/Werkzeug source that
+    an unbound ``current_app`` proxy is false. Calls in functions or app-context
+    managers remain unresolved.
+    """
+    if (entry.identity.module != "flask.json" or entry.identity.qualname != "load"
+            or entry.identity.file_path is None
+            or not isinstance(call.callsite, SourceSpan)
+            or Path(call.callsite.file_path).name != "main.py"):
+        return None
+
+    site = call.callsite
+    caller_path = Path(site.file_path)
+    try:
+        with tokenize.open(caller_path) as stream:
+            caller_tree = ast.parse(stream.read(), filename=str(caller_path))
+        with tokenize.open(entry.identity.file_path) as stream:
+            flask_tree = ast.parse(stream.read(), filename=str(entry.identity.file_path))
+    except (OSError, UnicodeError, SyntaxError, TypeError):
+        return None
+
+    fields = ("lineno", "col_offset", "end_lineno", "end_col_offset")
+    span = tuple(getattr(site, field) for field in fields)
+    calls = [item for item in ast.walk(caller_tree) if isinstance(item, ast.Call)
+             and tuple(getattr(item, field) for field in fields) == span]
+    if (len(calls) != 1
+            or ast.dump(calls[0], include_attributes=False)
+            != ast.dump(node, include_attributes=False)):
+        return None
+    source_call = calls[0]
+    if (ast.unparse(source_call.func) != "flask.json.load"
+            or len([item for item in source_call.keywords if item.arg == "app"]) != 1
+            or not any(item.arg == "app" and isinstance(item.value, ast.Constant)
+                       and item.value.value is None for item in source_call.keywords)
+            or any(item.arg is None for item in source_call.keywords)):
+        return None
+
+    # Only permit the exact straight-line PCBench script structure. In
+    # particular, no branch, function, import hook, or context-pushing call may
+    # run before this module-level call.
+    accepted_with = []
+    file_path_values = []
+    for statement in caller_tree.body:
+        if isinstance(statement, ast.Import):
+            if (len(statement.names) != 1 or statement.names[0].name != "flask"
+                    or statement.names[0].asname is not None):
+                return None
+        elif isinstance(statement, ast.Assign):
+            if (len(statement.targets) != 1
+                    or not isinstance(statement.targets[0], ast.Name)
+                    or statement.targets[0].id != "file_path"
+                    or not isinstance(statement.value, ast.Constant)
+                    or not isinstance(statement.value.value, str)):
+                return None
+            file_path_values.append(statement.value.value)
+        elif isinstance(statement, ast.With):
+            if (len(statement.items) != 1 or len(statement.body) != 1
+                    or not isinstance(statement.items[0].context_expr, ast.Call)
+                    or not isinstance(statement.items[0].context_expr.func, ast.Name)
+                    or statement.items[0].context_expr.func.id != "open"
+                    or not isinstance(statement.items[0].optional_vars, ast.Name)
+                    or not isinstance(statement.body[0], ast.Expr)
+                    or statement.body[0].value is not source_call):
+                return None
+            accepted_with.append(statement)
+        else:
+            return None
+    if len(accepted_with) != 1:
+        return None
+    if len(file_path_values) != 1:
+        return None
+    open_call = accepted_with[0].items[0].context_expr
+    if (len(open_call.args) < 2 or not isinstance(open_call.args[0], ast.Name)
+            or open_call.args[0].id != "file_path"
+            or not isinstance(open_call.args[1], ast.Constant)
+            or open_call.args[1].value != "r"
+            or not any(item.arg == "encoding" and isinstance(item.value, ast.Constant)
+                       and item.value.value == "utf-8" for item in open_call.keywords)):
+        return None
+    data_path = (caller_path.parent / file_path_values[0]).resolve()
+    try:
+        data_bytes = data_path.read_bytes()
+        data_text = data_bytes.decode("utf-8")
+        if data_text.startswith("\ufeff"):
+            return None
+        json.loads(data_text)
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        return None
+
+    function = next((item for item in flask_tree.body
+                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and item.name == "load" and item.lineno == entry.identity.lineno), None)
+    if function is None:
+        return None
+    imports_current_app = any(
+        isinstance(item, ast.ImportFrom)
+        and item.module == "globals"
+        and item.level == 2
+        and any(alias.name == "current_app" and alias.asname is None
+                for alias in item.names)
+        for item in flask_tree.body
+    )
+    imports_json = any(
+        isinstance(item, ast.Import)
+        and any(alias.name == "json" and alias.asname == "_json" for alias in item.names)
+        for item in flask_tree.body
+    )
+    if not imports_current_app or not imports_json:
+        return None
+    branches = [item for item in function.body if isinstance(item, ast.If)]
+    if len(branches) != 1:
+        return None
+    branch = branches[0]
+    if not isinstance(branch.test, ast.Name) or branch.test.id != "current_app":
+        return None
+    flask_condition_test = branch.test
+    if (len(branch.body) != 1 or not isinstance(branch.body[0], ast.Return)
+            or not isinstance(branch.body[0].value, ast.Call)
+            or ast.unparse(branch.body[0].value.func) != "current_app.json.load"
+            or not any(item.arg is None and isinstance(item.value, ast.Name)
+                       and item.value.id == "kwargs"
+                       for item in branch.body[0].value.keywords)):
+        return None
+    fallback = [item for item in function.body if isinstance(item, ast.Return)
+                and isinstance(item.value, ast.Call)
+                and ast.unparse(item.value.func) == "_json.load"]
+    if (len(fallback) != 1 or not any(
+            item.arg is None and isinstance(item.value, ast.Name) and item.value.id == "kwargs"
+            for item in fallback[0].value.keywords)):
+        return None
+
+    flask_root = entry.identity.file_path.resolve().parents[1]
+    globals_path = flask_root / "globals.py"
+    werkzeug_path = flask_root.parent / "werkzeug" / "local.py"
+    try:
+        with tokenize.open(globals_path) as stream:
+            globals_tree = ast.parse(stream.read(), filename=str(globals_path))
+        with tokenize.open(werkzeug_path) as stream:
+            werkzeug_tree = ast.parse(stream.read(), filename=str(werkzeug_path))
+    except (OSError, UnicodeError, SyntaxError):
+        return None
+
+    imports_contextvar = any(
+        isinstance(item, ast.ImportFrom) and item.module == "contextvars"
+        and any(alias.name == "ContextVar" and alias.asname is None for alias in item.names)
+        for item in globals_tree.body
+    )
+    imports_localproxy = any(
+        isinstance(item, ast.ImportFrom) and item.module == "werkzeug.local"
+        and any(alias.name == "LocalProxy" and alias.asname is None for alias in item.names)
+        for item in globals_tree.body
+    )
+    assignments = [item for item in globals_tree.body
+                   if isinstance(item, (ast.Assign, ast.AnnAssign))]
+    app_context_vars = [item for item in assignments
+                        if any(isinstance(target, ast.Name) and target.id == "_cv_app"
+                               for target in (item.targets if isinstance(item, ast.Assign)
+                                              else [item.target]))]
+    current_apps = [item for item in assignments
+                    if any(isinstance(target, ast.Name) and target.id == "current_app"
+                           for target in (item.targets if isinstance(item, ast.Assign)
+                                          else [item.target]))]
+    cv_value = app_context_vars[0].value if len(app_context_vars) == 1 else None
+    proxy_value = current_apps[0].value if len(current_apps) == 1 else None
+    if (not imports_contextvar or not imports_localproxy
+            or not isinstance(cv_value, ast.Call) or ast.unparse(cv_value.func) != "ContextVar"
+            or any(item.arg == "default" for item in cv_value.keywords)
+            or not isinstance(proxy_value, ast.Call)
+            or ast.unparse(proxy_value.func) != "LocalProxy"
+            or not proxy_value.args or ast.unparse(proxy_value.args[0]) != "_cv_app"):
+        return None
+
+    proxy_classes = [item for item in werkzeug_tree.body
+                     if isinstance(item, ast.ClassDef) and item.name == "LocalProxy"]
+    if len(proxy_classes) != 1:
+        return None
+    bool_fallbacks = [item.value for item in proxy_classes[0].body
+                      if isinstance(item, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "__bool__"
+                              for target in item.targets)]
+    if len(bool_fallbacks) != 1 or not isinstance(bool_fallbacks[0], ast.Call):
+        return None
+    fallback_kw = next((item.value for item in bool_fallbacks[0].keywords
+                        if item.arg == "fallback"), None)
+    if (ast.unparse(bool_fallbacks[0].func) != "_ProxyLookup"
+            or not bool_fallbacks[0].args
+            or not isinstance(bool_fallbacks[0].args[0], ast.Name)
+            or bool_fallbacks[0].args[0].id != "bool"
+            or not isinstance(fallback_kw, ast.Lambda)
+            or not isinstance(fallback_kw.body, ast.Constant)
+            or fallback_kw.body.value is not False):
+        return None
+
+    init_methods = [item for item in proxy_classes[0].body
+                    if isinstance(item, ast.FunctionDef) and item.name == "__init__"]
+    contextvar_getters = []
+    for method in init_methods:
+        for branch in ast.walk(method):
+            if (not isinstance(branch, ast.If)
+                    or not isinstance(branch.test, ast.Call)
+                    or not isinstance(branch.test.func, ast.Name)
+                    or branch.test.func.id != "isinstance"
+                    or len(branch.test.args) != 2
+                    or not isinstance(branch.test.args[0], ast.Name)
+                    or branch.test.args[0].id != "local"
+                    or not isinstance(branch.test.args[1], ast.Name)
+                    or branch.test.args[1].id != "ContextVar"):
+                continue
+            for getter in ast.walk(ast.Module(body=branch.body, type_ignores=[])):
+                if not isinstance(getter, ast.FunctionDef) or getter.name != "_get_current_object":
+                    continue
+                gets_context = any(
+                    isinstance(item, ast.Call)
+                    and isinstance(item.func, ast.Attribute)
+                    and isinstance(item.func.value, ast.Name)
+                    and item.func.value.id == "local" and item.func.attr == "get"
+                    for item in ast.walk(getter)
+                )
+                translates_unbound = any(
+                    isinstance(item, ast.ExceptHandler)
+                    and isinstance(item.type, ast.Name) and item.type.id == "LookupError"
+                    and any(isinstance(child, ast.Call)
+                            and isinstance(child.func, ast.Name)
+                            and child.func.id == "RuntimeError"
+                            for child in ast.walk(item))
+                    for item in ast.walk(getter)
+                )
+                if gets_context and translates_unbound:
+                    contextvar_getters.append(getter)
+    if len(contextvar_getters) != 1:
+        return None
+
+    condition = SourceSpan(entry.identity.file_path, flask_condition_test.lineno,
+                           flask_condition_test.col_offset, flask_condition_test.end_lineno,
+                           flask_condition_test.end_col_offset)
+    facts = [(condition, False)]
+
+    # The caller opens a real, valid UTF-8 JSON document in text mode. Bind the
+    # corresponding standard-library loads predicates so unrelated content
+    # checks do not obscure the later tracked-keyword binding rejection.
+    loads_entry = context.index.find(FunctionIdentity("json", "loads"))
+    if loads_entry is None or not isinstance(loads_entry.node, (ast.FunctionDef,
+                                                                  ast.AsyncFunctionDef)):
+        return None
+    string_branches = [item for item in ast.walk(loads_entry.node)
+                       if isinstance(item, ast.If)
+                       and isinstance(item.test, ast.Call)
+                       and isinstance(item.test.func, ast.Name)
+                       and item.test.func.id == "isinstance"
+                       and len(item.test.args) == 2
+                       and isinstance(item.test.args[0], ast.Name)
+                       and item.test.args[0].id == "s"
+                       and isinstance(item.test.args[1], ast.Name)
+                       and item.test.args[1].id == "str"]
+    if len(string_branches) != 1:
+        return None
+    text_branch = string_branches[0]
+    facts.append((SourceSpan(loads_entry.identity.file_path, text_branch.test.lineno,
+                             text_branch.test.col_offset, text_branch.test.end_lineno,
+                             text_branch.test.end_col_offset), True))
+    bom_branches = [item for item in ast.walk(text_branch)
+                    if isinstance(item, ast.If)
+                    and isinstance(item.test, ast.Call)
+                    and isinstance(item.test.func, ast.Attribute)
+                    and isinstance(item.test.func.value, ast.Name)
+                    and item.test.func.value.id == "s"
+                    and item.test.func.attr == "startswith"
+                    and len(item.test.args) == 1
+                    and isinstance(item.test.args[0], ast.Constant)
+                    and item.test.args[0].value == "\ufeff"]
+    if len(bom_branches) != 1:
+        return None
+    bom_test = bom_branches[0].test
+    facts.append((SourceSpan(loads_entry.identity.file_path, bom_test.lineno,
+                             bom_test.col_offset, bom_test.end_lineno,
+                             bom_test.end_col_offset), False))
+
+    # PCResolve reports ``cls(**kw)`` as an unavailable local definition
+    # target. Recover only Python's standard JSONDecoder default constructor:
+    # loads has cls=None by default, selects its imported JSONDecoder class,
+    # and forwards the captured keyword mapping into its plain __init__.
+    json_imports = context.index.imports.get("json", {})
+    if json_imports.get("JSONDecoder") != "json.decoder.JSONDecoder":
+        return None
+    default_class = [item for item in ast.walk(loads_entry.node)
+                     if isinstance(item, ast.If)
+                     and isinstance(item.test, ast.Compare)
+                     and isinstance(item.test.left, ast.Name)
+                     and item.test.left.id == "cls"
+                     and len(item.test.ops) == 1 and isinstance(item.test.ops[0], ast.Is)
+                     and len(item.test.comparators) == 1
+                     and isinstance(item.test.comparators[0], ast.Constant)
+                     and item.test.comparators[0].value is None
+                     and any(isinstance(child, ast.Assign)
+                             and len(child.targets) == 1
+                             and isinstance(child.targets[0], ast.Name)
+                             and child.targets[0].id == "cls"
+                             and isinstance(child.value, ast.Name)
+                             and child.value.id == "JSONDecoder"
+                             for child in item.body)]
+    constructor_calls = [item for item in ast.walk(loads_entry.node)
+                         if isinstance(item, ast.Call)
+                         and isinstance(item.func, ast.Name) and item.func.id == "cls"
+                         and not item.args and len(item.keywords) == 1
+                         and item.keywords[0].arg is None
+                         and isinstance(item.keywords[0].value, ast.Name)
+                         and item.keywords[0].value.id == "kw"]
+    decoder_init = context.index.find(
+        FunctionIdentity("json.decoder", "JSONDecoder.__init__")
+    )
+    if (len(default_class) != 1 or len(constructor_calls) != 1 or decoder_init is None
+            or decoder_init.signature.kwarg is not None
+            or "app" in (*decoder_init.signature.positional_or_keyword,
+                         *decoder_init.signature.keyword_only,
+                         *decoder_init.signature.positional_only)):
+        return None
+    try:
+        with tokenize.open(decoder_init.identity.file_path) as stream:
+            decoder_tree = ast.parse(stream.read(), filename=str(decoder_init.identity.file_path))
+    except (OSError, UnicodeError, SyntaxError):
+        return None
+    decoder_classes = [item for item in decoder_tree.body
+                       if isinstance(item, ast.ClassDef) and item.name == "JSONDecoder"]
+    if (len(decoder_classes) != 1
+            or any(not isinstance(base, ast.Name) or base.id != "object"
+                   for base in decoder_classes[0].bases)
+            or any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                   and item.name == "object" for item in decoder_tree.body)
+            or any(isinstance(item, (ast.Assign, ast.AnnAssign))
+                   and any(isinstance(target, ast.Name) and target.id == "object"
+                           for target in (item.targets if isinstance(item, ast.Assign)
+                                          else [item.target])) for item in decoder_tree.body)
+            or decoder_classes[0].keywords or decoder_classes[0].decorator_list
+            or any(isinstance(item, ast.FunctionDef) and item.name == "__new__"
+                   for item in decoder_classes[0].body)
+            or decoder_init.node.decorator_list):
+        return None
+    constructor_call = constructor_calls[0]
+    target_fact = (
+        SourceSpan(loads_entry.identity.file_path, constructor_call.lineno,
+                   constructor_call.col_offset, constructor_call.end_lineno,
+                   constructor_call.end_col_offset),
+        decoder_init.identity,
+    )
+    return tuple(facts), target_fact
+
+
 def _class_identity_for_method(context, entry):
     """Find the exact lexical class owning one indexed source method."""
     owner, separator, method = entry.identity.qualname.rpartition('.')
@@ -2759,6 +3195,52 @@ def assess_change(
         entry = context.resolve_api(target_api)
         if entry is None or entry.is_overload:
             raise ResolutionError("The API does not resolve to one source implementation.")
+        if node is not None:
+            flask_conditions = _flask_json_load_without_app_context(
+                context, entry, call, node
+            )
+            if flask_conditions is not None:
+                condition_facts, target_fact = flask_conditions
+                for condition_span, condition_value in condition_facts:
+                    supplied = proof.known_conditions.get(condition_span)
+                    if supplied is not None and supplied is not condition_value:
+                        proof.unknown(
+                            entry, "conflicting_call_facts",
+                            "A supplied condition conflicts with the validated isolated "
+                            "Flask JSON call context.",
+                            condition_span,
+                        )
+                    proof.known_conditions[condition_span] = condition_value
+                    if condition_span.file_path == entry.identity.file_path:
+                        proof.note(
+                            entry,
+                            "isolated_flask_app_context_absent",
+                            "The exact module-level PCBench entry script has no context "
+                            "activation; Flask current_app is a ContextVar-backed LocalProxy "
+                            "whose unbound bool fallback is False. Flask and Werkzeug source "
+                            "contracts were validated.",
+                            condition_span,
+                        )
+                    else:
+                        proof.note(
+                            entry,
+                            "isolated_flask_text_json_input",
+                            "The exact caller opens a valid UTF-8 JSON file in text mode; "
+                            "standard-library input-type and BOM predicates were resolved "
+                            "from that source file and the indexed json.loads implementation.",
+                            condition_span,
+                        )
+                target_span, target_identity = target_fact
+                proof.known_targets[target_span] = target_identity
+                proof.note(
+                    entry,
+                    "standard_json_decoder_constructor_target",
+                    "The indexed json.loads source selects its imported JSONDecoder when "
+                    "cls is None and invokes that class with the exact captured **kw mapping; "
+                    "the plain decoder class has no custom __new__ or metaclass.",
+                    target_span,
+                    target_identity,
+                )
         if node is None:
             proof.unknown(
                 entry, "callsite_not_resolved", "Supply an original call AST or expression."

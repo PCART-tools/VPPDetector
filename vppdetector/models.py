@@ -73,6 +73,7 @@ class SourceContext:
 
     package_root: Path
     import_roots: Tuple[Path, ...] = field(default_factory=tuple)
+    dependency_modules: Tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

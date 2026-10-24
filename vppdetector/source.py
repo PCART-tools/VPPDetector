@@ -396,7 +396,12 @@ def build_source_index(
     if not root.exists():
         raise FileNotFoundError("Package root does not exist: {}".format(root))
     import_roots = normalized_import_roots(source)
-    normalized_source = SourceContext(package_root=root, import_roots=import_roots)
+    dependency_modules = tuple(source.dependency_modules)
+    normalized_source = SourceContext(
+        package_root=root,
+        import_roots=import_roots,
+        dependency_modules=dependency_modules,
+    )
     is_api_scope = target_api is not None and target_api.file_path is not None
     if is_api_scope:
         entry_path = target_api.file_path.resolve()
@@ -404,7 +409,9 @@ def build_source_index(
             raise ValueError("API file must be within the requested source root")
         pending = [entry_path] if entry_path.is_file() else []
         if pending:
-            pending.extend(_package_initializers(entry_path, root, import_roots))
+            pending.extend(_package_initializers(
+                entry_path, root, import_roots, dependency_modules
+            ))
     else:
         pending = list(reversed(tuple(_python_files(root))))
     queued = set(pending)
@@ -448,13 +455,17 @@ def build_source_index(
                         modules = (prefix, prefix + "." + fact.name)
                     for name in modules:
                         if name not in locations:
-                            locations[name] = _module_files(name, root, import_roots)
+                            locations[name] = _module_files(
+                                name, root, import_roots, dependency_modules
+                            )
                         for dependency in locations[name]:
                             if dependency in queued:
                                 continue
                             for selected in (
                                 dependency,
-                                *_package_initializers(dependency, root, import_roots),
+                                *_package_initializers(
+                                    dependency, root, import_roots, dependency_modules
+                                ),
                             ):
                                 if selected not in queued:
                                     queued.add(selected)
@@ -530,7 +541,17 @@ def _within_source(path: Path, root: Path) -> bool:
     return True
 
 
-def _module_files(module: str, root: Path, import_roots: Sequence[Path]) -> Tuple[Path, ...]:
+def _is_dependency_module(module: str, dependency_modules: Sequence[str]) -> bool:
+    return any(module == dependency or module.startswith(dependency + ".")
+               for dependency in dependency_modules)
+
+
+def _module_files(
+    module: str,
+    root: Path,
+    import_roots: Sequence[Path],
+    dependency_modules: Sequence[str] = (),
+) -> Tuple[Path, ...]:
     parts = module.split(".")
     if not all(part.isidentifier() for part in parts):
         return ()
@@ -541,14 +562,19 @@ def _module_files(module: str, root: Path, import_roots: Sequence[Path]) -> Tupl
             if not candidate.is_file():
                 continue
             path = candidate.resolve()
-            if _within_source(path, root):
+            if _within_source(path, root) or _is_dependency_module(module, dependency_modules):
                 files.add(path)
     # Preserve ambiguous source candidates for PCResolve, never choose a root
     # or file/package collision as an implicit ownership decision.
     return tuple(sorted(files))
 
 
-def _package_initializers(path: Path, root: Path, import_roots: Sequence[Path]) -> Iterable[Path]:
+def _package_initializers(
+    path: Path,
+    root: Path,
+    import_roots: Sequence[Path],
+    dependency_modules: Sequence[str] = (),
+) -> Iterable[Path]:
     for import_root in import_roots:
         # A standalone file may itself be the inferred import root. There
         # cannot be an ancestor package chain ending at a file path.
@@ -563,7 +589,9 @@ def _package_initializers(path: Path, root: Path, import_roots: Sequence[Path]) 
             candidate = parent / "__init__.py"
             if candidate.is_file():
                 resolved = candidate.resolve()
-                if _within_source(resolved, root):
+                module = module_name_for_path(resolved, import_roots)
+                if (_within_source(resolved, root)
+                        or _is_dependency_module(module, dependency_modules)):
                     yield resolved
             parent = parent.parent
 
