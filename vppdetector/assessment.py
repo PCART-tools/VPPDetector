@@ -238,14 +238,12 @@ def _class_binding_may_escape(context, class_identity):
     """Detect source uses that can expose a class object to arbitrary code."""
     if class_identity is None or not class_identity.file_path:
         return False
-    try:
-        with tokenize.open(class_identity.file_path) as stream:
-            tree = ast.parse(stream.read())
-    except (OSError, SyntaxError, UnicodeError):
+    structure = context._source_queries.structure(class_identity.file_path, 'tokenize')
+    if structure is None:
         return False
-    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    parents = structure.parents()
     name = class_identity.qualname.rsplit(".", 1)[-1]
-    for node in ast.walk(tree):
+    for node in structure.walk():
         if not isinstance(node, ast.Name) or node.id != name:
             continue
         parent = parents.get(node)
@@ -255,7 +253,7 @@ def _class_binding_may_escape(context, class_identity):
             if (node in parent.args and len(parent.args) >= 2
                     and parent.args[1] is node and isinstance(parent.func, ast.Name)
                     and parent.func.id in {"isinstance", "issubclass"}):
-                owner = next((item for item in ast.walk(tree)
+                owner = next((item for item in structure.walk()
                               if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
                               and item.lineno <= node.lineno <= item.end_lineno), None)
                 shadowed = bool(owner and (
@@ -1326,6 +1324,7 @@ class _Frame:
                             retention = static_retained_store(
                                 self.analysis, self.function, statement, target,
                                 mapping_capture=capture if mapping_store else None,
+                                source_queries=self.proof.context._source_queries,
                             )
                             if retention is not None:
                                 self.proof.handled(

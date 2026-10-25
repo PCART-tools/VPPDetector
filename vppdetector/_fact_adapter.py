@@ -89,6 +89,9 @@ class PCResolveAdapter:
         options = {}
         if 'support_source_protocols' in inspect.signature(FlowAnalyzer).parameters:
             options['support_source_protocols'] = True
+        if (index.source_store is not None
+                and 'source_store' in inspect.signature(FlowAnalyzer).parameters):
+            options['source_store'] = index.source_store
         self._analyzer = FlowAnalyzer(source_files=index.files,
                                       import_roots=index.source.import_roots, **options)
         self._import_roots = tuple(_path(path) for path in self._analyzer.roots)

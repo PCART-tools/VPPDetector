@@ -12,6 +12,7 @@ from ._program_facts import (
     source_alias_entry,
     source_constructor_entry_binding,
 )
+from ._source_queries import SourceQueries
 from .models import FunctionIdentity, SourceContext
 from .source import IndexedFunction, SourceIndex, build_source_index, normalized_import_roots
 
@@ -31,6 +32,7 @@ class AnalysisContext:
     _return_transform_spans: dict = field(default_factory=dict, init=False, repr=False)
     _constant_tests: dict = field(default_factory=dict, init=False, repr=False)
     _dispatch_context_cache: dict = field(default_factory=dict, init=False, repr=False)
+    _source_queries: SourceQueries = field(default_factory=SourceQueries, init=False, repr=False)
 
     @classmethod
     def from_source(cls, source: SourceContext) -> "AnalysisContext":
@@ -49,7 +51,9 @@ class AnalysisContext:
 
     @classmethod
     def from_index(cls, index: SourceIndex) -> "AnalysisContext":
-        return cls(index=index, adapter=PCResolveAdapter(index))
+        context = cls(index=index, adapter=PCResolveAdapter(index))
+        context._source_queries = SourceQueries(index.source_store)
+        return context
 
     def resolve_api(self, identity: FunctionIdentity) -> Optional[IndexedFunction]:
         entry = self.index.find(identity)

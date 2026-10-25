@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import tokenize
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple, Union
@@ -74,6 +75,7 @@ class SourceIndex:
     classes: Tuple[FunctionIdentity, ...] = ()
     is_api_scope: bool = False
     condition_nodes: dict = field(default_factory=dict, repr=False)
+    source_store: object = field(default=None, repr=False, compare=False)
     _definition_index: object = field(default=None, init=False, repr=False)
     _location_members: Optional[tuple] = field(default=None, init=False, repr=False, compare=False)
     _function_locations: dict = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -378,6 +380,17 @@ class _FunctionCollector(ast.NodeVisitor):
         self.scope.pop()
 
 
+def _import_statements(tree):
+    """Retain breadth-first import order without traversing expression payloads."""
+    pending = deque([tree])
+    while pending:
+        node = pending.popleft()
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            yield node
+        elif not isinstance(node, ast.expr):
+            pending.extend(ast.iter_child_nodes(node))
+
+
 def build_source_index(
     source: SourceContext, *, target_api: Optional[FunctionIdentity] = None
 ) -> SourceIndex:
@@ -389,8 +402,12 @@ def build_source_index(
     """
     from pcresolve.import_facts import import_facts, resolve_relative_module
     from pcresolve.scope_facts import statement_scope_facts
+    from pcresolve.source_snapshot import SourceReadPolicy, SourceStore
     from pcresolve.source_syntax import parse_python_source
     from pcresolve.star_imports import static_star_imports
+
+    source_store = SourceStore() if hasattr(SourceStore, 'read_document') else None
+    source_policy = SourceReadPolicy('tokenize', legacy_keyword_attributes=True)
 
     root = source.package_root.resolve()
     if not root.exists():
@@ -431,8 +448,17 @@ def build_source_index(
             continue
         visited.add(file_path)
         try:
-            with tokenize.open(file_path) as stream:
-                tree = parse_python_source(stream.read(), filename=str(file_path))
+            if source_store is None:
+                with tokenize.open(file_path) as stream:
+                    tree = parse_python_source(stream.read(), filename=str(file_path))
+            else:
+                document = source_store.read_document(str(file_path), source_policy)
+                if document.error is not None:
+                    if document.error_stage == 'parse':
+                        # Retain VPP's filename-bearing syntax diagnostics.
+                        parse_python_source(document.text, filename=str(file_path))
+                    raise document.error
+                tree = document.tree
         except (OSError, SyntaxError, UnicodeError) as exc:
             boundaries.append(
                 AnalysisBoundary(
@@ -444,7 +470,7 @@ def build_source_index(
         module = module_name_for_path(file_path, import_roots)
         module_bodies.setdefault(module, []).append((str(file_path), tree.body))
         if is_api_scope:
-            for node in ast.walk(tree):
+            for node in _import_statements(tree):
                 for fact in import_facts(node):
                     if fact.kind == "import":
                         modules = (fact.name,)
@@ -528,6 +554,7 @@ def build_source_index(
         classes=tuple(sorted(classes, key=lambda item: (str(item.file_path), item.lineno))),
         is_api_scope=is_api_scope,
         condition_nodes=condition_nodes,
+        source_store=source_store,
     )
 
 

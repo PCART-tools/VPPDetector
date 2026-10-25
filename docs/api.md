@@ -143,6 +143,13 @@ implementation code, not a client file.
 
 ### Reusable analysis context
 
+Within one context, syntax queries reuse source structures while compatibility
+proofs remain specific to each call. When PCResolve supports a shared
+`SourceStore`, source preparation and value-flow analysis reuse compatible ASTs
+through that explicit interface. Decoding policies and the selected file set
+remain separate, and reads still validate content. Older supported PCResolve
+versions retain independent source preparation.
+
 `AnalysisContext.from_source(source)` prepares a full-source context for
 whole-package scanning or multiple on-demand analyses in the same source
 version.

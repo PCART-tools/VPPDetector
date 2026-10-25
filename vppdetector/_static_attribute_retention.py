@@ -8,7 +8,9 @@ from pathlib import Path
 from ._program_facts import identity_from_target, source_constructor_entry_binding
 
 
-def _method_node(path, identity):
+def _method_node(path, identity, source_queries=None):
+    if source_queries is not None:
+        return source_queries.method(path, identity)
     try:
         with open(path, encoding="utf-8-sig") as stream:
             tree = ast.parse(stream.read(), filename=path)
@@ -26,10 +28,11 @@ def _attribute_path(node, receiver, attribute):
             and isinstance(node.value, ast.Name) and node.value.id == receiver)
 
 
-def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_line):
+def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_line,
+                                source_queries=None):
     """Reject a retention claim if checked source methods can invalidate its field."""
     for target in checked:
-        method = _method_node(target.file_path, target)
+        method = _method_node(target.file_path, target, source_queries)
         if method is None:
             return True
         for node in ast.walk(method):
@@ -58,7 +61,8 @@ def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_li
     return False
 
 
-def retained_store(analysis, function, statement, destination, mapping_capture=None):
+def retained_store(analysis, function, statement, destination, mapping_capture=None,
+                   source_queries=None):
     """Match a scalar or unchanged keyword-capture store to a source witness."""
     if function.query_class is None or not isinstance(destination, ast.Attribute):
         return None
@@ -115,6 +119,6 @@ def retained_store(analysis, function, statement, destination, mapping_capture=N
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
     if _later_mutation_is_possible(
-            analysis, methods, receiver, destination.attr, statement.lineno):
+            analysis, methods, receiver, destination.attr, statement.lineno, source_queries):
         return None
     return fact
