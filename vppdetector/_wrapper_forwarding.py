@@ -1,9 +1,14 @@
+## @package vppdetector._wrapper_forwarding
+#  Validate call-conditioned forwarding through source wrappers.
+#  校验经过源码包装函数的调用条件转发。
+
 """Validate call-conditioned forwarding through a source factory wrapper."""
 
 import ast
 
 from ._fresh_decoration import observation_guard
 from ._program_facts import identity_from_target
+
 
 _FIELDS = ("lineno", "col_offset", "end_lineno", "end_col_offset")
 _ASSUMPTIONS = {
@@ -18,10 +23,15 @@ _ASSUMPTIONS = {
     "no_external_registry_mutation",
     "no_unmodeled_indirect_function_mutation",
 }
-
-
+## Return a forwarding fact only for its supported actual positional count
+## 仅在实际位置参数数量符合支持条件时返回转发事实
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param analysis PCResolve analysis result being validated or consumed.
+#  @param function Indexed source function under analysis.
+#  @param positional_count Number of positional arguments supplied.
+#  @return Result of the `binding` operation.
 def binding(context, analysis, function, positional_count):
-    """Return a forwarding fact only for its supported actual positional count."""
     if type(positional_count) is not int or positional_count < 0:
         return None
     summaries = [
@@ -69,6 +79,13 @@ def binding(context, analysis, function, positional_count):
     ):
         return None
 
+    ## Validate the producer witness required by the enclosing proof
+    ## 校验所属证明所需的生产者见证
+    #
+    #  @param value Value or producer record being interpreted.
+    #  @param identity Source-level identity used for lookup.
+    #  @param node AST node or source expression being analyzed.
+    #  @return Result of the `witness` operation.
     def witness(value, identity, node):
         return (
             isinstance(value, dict)
@@ -83,10 +100,12 @@ def binding(context, analysis, function, positional_count):
         fact.get("factory_evidence"), function.identity, function.node.decorator_list[0]
     ):
         return None
+
     factory_identity = identity_from_target(fact.get("factory"))
     factory = context.index.find(factory_identity) if factory_identity is not None else None
     if factory is None:
         return None
+
     wrappers = [
         node
         for node in factory.node.body
@@ -106,6 +125,7 @@ def binding(context, analysis, function, positional_count):
         or len(wrapper.decorator_list) != 1
     ):
         return None
+
     if maximum is not None:
         if len(body) != 2 or not isinstance(body[0], ast.If) or body[0].orelse:
             return None
@@ -131,6 +151,7 @@ def binding(context, analysis, function, positional_count):
         or not isinstance(body[0].value, ast.Call)
     ):
         return None
+
     call = body[0].value
     if (
         not witness(forwarding.get("call_evidence"), factory_identity, call)
@@ -146,6 +167,7 @@ def binding(context, analysis, function, positional_count):
         or call.keywords[0].value.id != args.kwarg.arg
     ):
         return None
+
     metadata = fact.get("metadata_wrappers")
     if (
         not isinstance(metadata, (list, tuple))

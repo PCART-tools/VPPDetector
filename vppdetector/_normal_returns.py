@@ -1,3 +1,7 @@
+## @package vppdetector._normal_returns
+#  Validate normal completion and mapping-retention evidence.
+#  校验正常完成及映射保留证据。
+
 """Require actual completion and a producer-proven mapping retention path."""
 
 from __future__ import annotations
@@ -12,8 +16,16 @@ from ._program_facts import identity_from_target
 from .models import FunctionIdentity, SourceSpan
 
 
+## Validate one call-specific observation and its conditional source transfer
+## 验证一次特定调用的运行观测及其条件性源码转移
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param entry Resolved source entry for the requested API.
+#  @param call Original client call or its call-specific evidence.
+#  @param change Description of the removed or renamed parameter.
+#  @param original Value named `original` supplied by the enclosing analysis.
+#  @return Result of the `mapping_return` operation.
 def mapping_return(context, entry, call, change, original):
-    """Validate one call-specific observation and its conditional source transfer."""
     if len(call.observed_normal_returns) != 1:
         return None
     observed = call.observed_normal_returns[0]
@@ -34,6 +46,7 @@ def mapping_return(context, entry, call, change, original):
             for name in ('lineno', 'col_offset', 'end_lineno', 'end_col_offset'))):
         return None
     try:
+
         hashes = dict(observed.source_hashes)
         if len(hashes) != len(observed.source_hashes) or entry.identity.file_path not in hashes:
             return None
@@ -45,6 +58,7 @@ def mapping_return(context, entry, call, change, original):
         analysis = context.adapter.analyze(entry.identity)
     except (OSError, TypeError, ValueError, ResolutionError):
         return None
+
     summaries = [f for f in analysis.functions
                  if identity_from_target(f.get('function')) == entry.identity]
     if len(summaries) != 1:
@@ -52,6 +66,7 @@ def mapping_return(context, entry, call, change, original):
     facts = summaries[0].get('mapping_return_transfers', ())
     if not isinstance(facts, (list, tuple)) or len(facts) != 1 or not isinstance(facts[0], dict):
         return None
+
     fact = facts[0]
     expected = {'file_path': str(span.file_path), 'lineno': span.lineno,
                 'col_offset': span.col_offset, 'end_lineno': span.end_lineno,
@@ -71,6 +86,7 @@ def mapping_return(context, entry, call, change, original):
             or fact.get('assumptions') != [
                 'standard_builtin_dict', 'no_external_frame_introspection']):
         return None
+
     witnesses = []
     for evidence, kind in ((fact.get('update_evidence'), ast.Call), (expected, ast.Return)):
         if (not isinstance(evidence, dict)
@@ -93,6 +109,7 @@ def mapping_return(context, entry, call, change, original):
             or not isinstance(update.args[0], ast.Name)
             or update.args[0].id != fact['parameter']):
         return None
+
     receiver, actual_path = update.func.value, []
     while isinstance(receiver, ast.Subscript):
         if not isinstance(receiver.slice, ast.Constant) or type(receiver.slice.value) is not str:

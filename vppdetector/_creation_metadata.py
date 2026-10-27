@@ -1,3 +1,7 @@
+## @package vppdetector._creation_metadata
+#  Validate metadata queries made during source class creation.
+#  校验源码类创建期间发生的元数据查询。
+
 """Validate metadata-query premises embedded in source class creation effects."""
 
 _CLAIM = "source_class_creation_callable_metadata_queries"
@@ -33,10 +37,21 @@ _OBSERVERS = {
 }
 
 
+## Extract finite string values from a producer fact
+## 从生产者事实中提取有限字符串值
+#
+#  @param value Value or producer record being interpreted.
+#  @return Result of the `_strings` operation.
 def _strings(value):
     return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
 
 
+## Validate and convert a producer target into a source identity
+## 校验并将生产者目标转换为源码身份
+#
+#  @param value Value or producer record being interpreted.
+#  @param hashes Source-content hashes supplied by the producer.
+#  @return Result of the `_identity` operation.
 def _identity(value, hashes):
     return (
         isinstance(value, dict)
@@ -50,6 +65,12 @@ def _identity(value, hashes):
     )
 
 
+## Validate a source witness against its owner and evidence record
+## 根据所属对象和证据记录校验源码见证
+#
+#  @param value Value or producer record being interpreted.
+#  @param owner Source identity that owns the queried behavior.
+#  @return Result of the `_witness` operation.
 def _witness(value, owner):
     return (
         isinstance(value, dict)
@@ -60,6 +81,12 @@ def _witness(value, owner):
     )
 
 
+## Check whether one source span is contained in another
+## 检查一个源码范围是否包含于另一个范围
+#
+#  @param inner Value named `inner` supplied by the enclosing analysis.
+#  @param outer Value named `outer` supplied by the enclosing analysis.
+#  @return Result of the `_contained` operation.
 def _contained(inner, outer):
     return (
         inner["file_path"] == outer["file_path"]
@@ -68,6 +95,12 @@ def _contained(inner, outer):
     )
 
 
+## Read a supported metadata observer from one producer call
+## 从生产者调用中读取受支持的元数据观察器
+#
+#  @param call Original client call or its call-specific evidence.
+#  @param hashes Source-content hashes supplied by the producer.
+#  @return Result of the `_observer` operation.
 def _observer(call, hashes):
     guard = call.get("observation_guard")
     if (
@@ -128,6 +161,13 @@ def _observer(call, hashes):
     return True
 
 
+## Validate a metadata query and its source-bound target
+## 校验元数据查询及其源码绑定目标
+#
+#  @param call Original client call or its call-specific evidence.
+#  @param entry Resolved source entry for the requested API.
+#  @param hashes Source-content hashes supplied by the producer.
+#  @return Result of the `_query` operation.
 def _query(call, entry, hashes):
     query = call.get("query")
     if (
@@ -159,6 +199,7 @@ def _query(call, entry, hashes):
         or query.get("definition_evidence") != entry["definition_evidence"]
     ):
         return None
+
     effects = query.get("input_effects")
     if (
         not isinstance(effects, dict)
@@ -167,6 +208,7 @@ def _query(call, entry, hashes):
         or type(effects.get("native_cache_retention")) is not bool
     ):
         return None
+
     protocols, records = set(), query.get("protocol_calls")
     if not isinstance(records, (list, tuple)) or not 1 <= len(records) <= 2000:
         return None
@@ -183,6 +225,7 @@ def _query(call, entry, hashes):
             protocols.add(_INPUT_PROTOCOLS[record["protocol"]])
     if not protocols:
         return None
+
     cached = effects["native_cache_retention"]
     construction = query.get("construction")
     if cached:
@@ -226,6 +269,7 @@ def _query(call, entry, hashes):
         protocols.add("native_callable_hash_equality_without_user_callbacks")
     elif construction is not None:
         return None
+
     preconditions = query.get("input_preconditions")
     if (
         not isinstance(preconditions, dict)
@@ -238,8 +282,13 @@ def _query(call, entry, hashes):
     return sorted(protocols)
 
 
+## Require each metadata query's conditional input and actual source binding
+## 逐项核对元数据查询的条件输入及实际源码绑定
+#
+#  @param hook Value named `hook` supplied by the enclosing analysis.
+#  @param supporting_source_hashes Hashes of supporting source files used by producer facts.
+#  @return Result of the `creation_metadata_premises` operation.
 def creation_metadata_premises(hook, supporting_source_hashes=None):
-    """Require each metadata query's conditional input and actual source binding."""
     primary = hook.get('source_hashes')
     supporting = {} if supporting_source_hashes is None else supporting_source_hashes
     if (not isinstance(primary, dict) or not isinstance(supporting, dict)
@@ -250,6 +299,7 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
         return False
     if not _signature_creations(hook, {**primary, **supporting}):
         return False
+
     records = hook.get("callable_metadata_queries")
     claimed = _CLAIM in hook.get("assumptions", ())
     if records is None:
@@ -261,6 +311,7 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
         hook.get("class_evidence"), hook["receiver_class"]
     ):
         return False
+
     callers = [hook["target"]] + [call["target"] for call in hook.get("method_calls", ())]
     seen = set()
     for call in records:
@@ -286,6 +337,7 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
             or not _witness(call.get("call_evidence"), call["caller"])
         ):
             return False
+
         entry = call.get("entry_binding")
         if (
             not isinstance(entry, dict)
@@ -295,8 +347,10 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
             or entry.get("runtime_target_confirmed") is not False
             or entry.get("source_hashes") != hashes
             or not _strings(entry.get("assumptions"))
+
             # Observer-result projection has its own conditional input and
             # lifetime premises. It cannot inherit this scalar-query reader.
+            # 观测结果投影有独立的条件输入和生命周期前提，不能复用此标量查询读取器的结论。
             or "private_query_results" in entry
             or "source_private_observer_result_projection" in entry.get("assumptions", ())
             or not {
@@ -319,6 +373,7 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
             or not _contained(entry["definition_evidence"], entry["class_evidence"])
         ):
             return False
+
         protocols = _query(call, entry, hashes)
         binding = call.get("input_binding")
         if (
@@ -364,6 +419,13 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
     return True
 
 
+## Read the dynamic signature parameters established by the hook proof
+## 读取钩子证明所确定的动态签名参数
+#
+#  @param hook Value named `hook` supplied by the enclosing analysis.
+#  @param proof Proof state that receives evidence and boundaries.
+#  @param hashes Source-content hashes supplied by the producer.
+#  @return Result of the `_dynamic_signature_parameters` operation.
 def _dynamic_signature_parameters(hook, proof, hashes):
     dynamic = proof.get('dynamic_parameters')
     if not isinstance(dynamic, (list, tuple)) or not 1 <= len(dynamic) <= 256:
@@ -420,6 +482,12 @@ def _dynamic_signature_parameters(hook, proof, hashes):
     return True
 
 
+## Validate signature-construction effects and their source evidence
+## 校验签名构造效果及其源码证据
+#
+#  @param hook Value named `hook` supplied by the enclosing analysis.
+#  @param complete_source_hashes Hashes for the complete source snapshot.
+#  @return Result of the `_signature_creations` operation.
 def _signature_creations(hook, complete_source_hashes=None):
     records = hook.get('signature_creations')
     claim = 'standard_library_inspect_signature_creation'

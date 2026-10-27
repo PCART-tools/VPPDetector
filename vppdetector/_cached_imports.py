@@ -1,3 +1,7 @@
+## @package vppdetector._cached_imports
+#  Validate source evidence for cached imports.
+#  校验缓存导入相关的源码证据。
+
 """Match source cached-import facts; availability and cache premises stay explicit."""
 
 from __future__ import annotations
@@ -10,8 +14,14 @@ from pcresolve.import_facts import resolve_relative_module
 from ._program_facts import identity_from_target
 
 
+## Read one exact reached from-import under the producer's cache conditions
+## 按生产者缓存条件读取精确到达的导入绑定
+#
+#  @param analysis PCResolve analysis result being validated or consumed.
+#  @param function Indexed source function under analysis.
+#  @param statement Value named `statement` supplied by the enclosing analysis.
+#  @return Result of the `cached_import_binding` operation.
 def cached_import_binding(analysis, function, statement):
-    """Read one exact reached from-import under the producer's cache conditions."""
     if (not isinstance(statement, ast.ImportFrom) or statement.level
             or not statement.module or any(alias.name == '*' for alias in statement.names)):
         return None
@@ -29,6 +39,8 @@ def cached_import_binding(analysis, function, statement):
     bindings = [{'name': alias.asname or alias.name, 'module': statement.module,
                  'attribute': alias.name} for alias in statement.names]
     hashes = record.get('source_hashes')
+
+    # 缓存导入事实依赖源码快照和模块缓存保持，不能视为运行时导入验证
     required = {'source_snapshot_bindings_hold', 'standard_builtin_import_binding',
                 'initialized_source_module_cache_preserved',
                 'no_external_monkeypatch_or_import_hook', 'no_unmodeled_indirect_module_mutation'}
@@ -57,8 +69,16 @@ def cached_import_binding(analysis, function, statement):
     return record
 
 
+## Validate a cached import inside a closed decorator proof, without executing it
+## 在封闭装饰器证明中验证缓存导入，不执行导入代码
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param analysis PCResolve analysis result being validated or consumed.
+#  @param function Indexed source function under analysis.
+#  @param fact Producer fact being validated or interpreted.
+#  @param effect Value named `effect` supplied by the enclosing analysis.
+#  @return Result of the `decorator_import_binding` operation.
 def decorator_import_binding(context, analysis, function, fact, effect):
-    """Validate a cached import inside a closed decorator proof, without executing it."""
     record = effect.get('binding')
     if not isinstance(record, dict):
         return None
@@ -73,6 +93,7 @@ def decorator_import_binding(context, analysis, function, fact, effect):
             or any(effect['evidence'].get(key) != witness.get(key) for key in fields)
             or effect['evidence'].get('file_path') != witness['file_path']):
         return None
+
     imports = [node for node in ast.walk(selected.node) if isinstance(node, ast.ImportFrom)
                and all(getattr(node, key) == witness.get(key) for key in fields)]
     if (len(imports) != 1 or imports[0].level or not imports[0].module
@@ -86,6 +107,7 @@ def decorator_import_binding(context, analysis, function, fact, effect):
                 'no_external_monkeypatch_or_import_hook',
                 'no_unmodeled_indirect_module_mutation', 'standard_builtin_namespace_preserved'}
     hashes, assumptions = record.get('source_hashes'), record.get('assumptions')
+
     initialization = record.get('initialization_evidence')
     if (record.get('kind') != 'source_cached_import_binding'
             or record.get('status') != 'bound_on_normal_cached_import_return'
@@ -109,8 +131,10 @@ def decorator_import_binding(context, analysis, function, fact, effect):
             or not required.issubset(fact.get('assumptions', ()))
             or not isinstance(initialization, (list, tuple)) or not initialization):
         return None
+
     # Match initialization witnesses to actual top-level import syntax. This
     # checks evidence identity, not the producer's import/cache semantics again.
+    # 将初始化见证与实际顶层导入语法匹配，只核对证据身份，不重复推断生产者的导入或缓存语义。
     try:
         tree = ast.parse(Path(function.identity.file_path).read_text(encoding='utf-8-sig'))
     except (OSError, UnicodeError, SyntaxError, RecursionError):
@@ -124,6 +148,7 @@ def decorator_import_binding(context, analysis, function, fact, effect):
                            and all(getattr(node, key) == source[key] for key in fields)
                            for node in tree.body)):
             return None
+
     lookups = record.get('package_lookups')
     if not isinstance(lookups, (list, tuple)):
         return None

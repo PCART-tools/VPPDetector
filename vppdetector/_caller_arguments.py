@@ -1,3 +1,7 @@
+## @package vppdetector._caller_arguments
+#  Read exact caller argument syntax without evaluating expressions.
+#  读取精确的调用实参语法，不执行调用表达式。
+
 """Validate source-bound caller arguments without evaluating caller expressions."""
 
 from __future__ import annotations
@@ -9,11 +13,18 @@ import tokenize
 
 from .models import SourceSpan
 
+
 _FIELDS = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 _ASSUMPTIONS = {'source_snapshot_bindings_hold', 'standard_module_global_lookup',
                 'no_external_module_global_mutation'}
 
 
+## Convert source coordinates into a validated source span
+## 将源码坐标转换为经过校验的源码范围
+#
+#  @param record Producer record whose fields are validated.
+#  @param path Filesystem path of the source being read or checked.
+#  @return Result of the `_span` operation.
 def _span(record, path):
     return (isinstance(record, dict) and record.get('file_path') == path
             and all(type(record.get(key)) is int for key in _FIELDS)
@@ -23,6 +34,13 @@ def _span(record, path):
             > (record['lineno'], record['col_offset']))
 
 
+## Build a bounded abstract value from caller-provided literal input
+## 根据调用方提供的字面量输入构建有界抽象值
+#
+#  @param value Value or producer record being interpreted.
+#  @param budget Maximum amount of literal or container state to model.
+#  @param depth Current recursive or structural analysis depth.
+#  @return Result of the `_state` operation.
 def _state(value, budget, depth=0):
     budget[0] -= 1
     if budget[0] < 0 or depth > 16 or not isinstance(value, dict):
@@ -49,8 +67,16 @@ def _state(value, budget, depth=0):
     raise ValueError('Unsupported caller value')
 
 
+## Return typed slot values and the target for this exact source call
+## 返回此精确源码调用的类型化参数槽位和目标
+#
+#  @param adapter Value named `adapter` supplied by the enclosing analysis.
+#  @param call Original client call or its call-specific evidence.
+#  @param node AST node or source expression being analyzed.
+#  @param target Producer target record or selected source target.
+#  @param entry Resolved source entry for the requested API.
+#  @return Result of the `caller_arguments` operation.
 def caller_arguments(adapter, call, node, target, entry):
-    """Return typed slot values and the target for this exact source call."""
     if (not isinstance(call.callsite, SourceSpan)
             or not all(type(getattr(call.callsite, key)) is int for key in _FIELDS)):
         return None
@@ -70,6 +96,8 @@ def caller_arguments(adapter, call, node, target, entry):
             and fact.get('target') is None
             and fact.get('target_status') == 'receiver_expression_only'
             and fact.get('target_expression') == ast.dump(node.func, include_attributes=False))
+
+        # 只消费与当前目标、调用语法和证据范围一致的调用方事实
         if (not isinstance(fact, dict) or fact.get('kind') != 'source_callsite_inputs'
                 or fact.get('status') != 'source_bound'
                 or fact.get('scope') != 'argument_reads_on_normal_module_prefix'
@@ -83,6 +111,9 @@ def caller_arguments(adapter, call, node, target, entry):
                 or not _span(fact.get('call_evidence'), path)
                 or any(fact['call_evidence'][key] != getattr(site, key) for key in _FIELDS)):
             return None
+
+
+        # 先校验支持源码及调用文件的哈希，避免复用过期事实
         supporting = fact.get('supporting_source_sha256', {})
         if not isinstance(supporting, dict):
             return None
@@ -93,11 +124,15 @@ def caller_arguments(adapter, call, node, target, entry):
                 support_text = stream.read()
             if hashlib.sha256(support_text.encode('utf-8')).hexdigest() != support_digest:
                 return None
+
         with tokenize.open(path) as stream:
             source_text = stream.read()
         digest = hashlib.sha256(source_text.encode('utf-8')).hexdigest()
         if fact.get('source_hashes') != {path: digest}:
             return None
+
+
+        # 完整位置和语法树都匹配时才将事实绑定到当前调用
         source_tree = ast.parse(source_text, filename=path)
         source_calls = [item for item in ast.walk(source_tree) if isinstance(item, ast.Call)
             and (item.lineno, item.col_offset, item.end_lineno, item.end_col_offset)
@@ -107,6 +142,7 @@ def caller_arguments(adapter, call, node, target, entry):
                 != ast.dump(node, include_attributes=False)):
             return None
         source_node = source_calls[0]
+
         binding = fact.get('target_binding_evidence')
         receiver_binding_exact = (receiver_bound and isinstance(binding, list)
             and len(binding) == 1 and _span(binding[0], path)
@@ -120,6 +156,7 @@ def caller_arguments(adapter, call, node, target, entry):
         if any(isinstance(arg, ast.Starred) for arg in source_node.args) or any(
                 kw.arg is None for kw in source_node.keywords):
             return None
+
         slots = [(('position', i), arg) for i, arg in enumerate(source_node.args)]
         slots.extend((('keyword', kw.arg), kw.value) for kw in source_node.keywords)
         records = fact.get('arguments')

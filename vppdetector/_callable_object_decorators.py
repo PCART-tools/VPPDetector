@@ -1,3 +1,7 @@
+## @package vppdetector._callable_object_decorators
+#  Source proofs for supported callable-object decorators.
+#  为受支持的可调用对象装饰器提供源码证明。
+
 """Small source proofs for callable-object decorators that preserve functions."""
 
 from __future__ import annotations
@@ -9,6 +13,12 @@ from pathlib import Path
 from ._program_facts import identity_from_target
 
 
+## Compare a source node with an expected syntax fragment
+## 比较源码节点与预期语法片段
+#
+#  @param node AST node or source expression being analyzed.
+#  @param source Library source directory, file, or source context.
+#  @return Result of the `_same` operation.
 def _same(node, source):
     try:
         expected = ast.parse(source).body
@@ -19,6 +29,13 @@ def _same(node, source):
     )
 
 
+## Resolve one source AST node of the requested type
+## 解析指定类型的源码AST节点
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param identity Source-level identity used for lookup.
+#  @param node_type AST node class required for the lookup.
+#  @return Result of the `_source_node` operation.
 def _source_node(context, identity, node_type):
     candidates = [
         item for item in context.index.functions
@@ -31,14 +48,15 @@ def _source_node(context, identity, node_type):
     return candidates[0] if len(candidates) == 1 else None
 
 
+## Prove Matplotlib's docstring callable-object decorator returns this function
+## 证明Matplotlib文档字符串可调用对象装饰器返回原函数
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param analysis PCResolve analysis result being validated or consumed.
+#  @param function Indexed source function under analysis.
+#  @param fact Producer fact being validated or interpreted.
+#  @return Result of the `matplotlib_docstring_function_binding` operation.
 def matplotlib_docstring_function_binding(context, analysis, function, fact):
-    """Prove Matplotlib's docstring callable-object decorator returns this function.
-
-    Matplotlib 3.5 used ``docstring.dedent_interpd``; later releases moved the
-    same source protocol to ``_docstring.dedent_interpd``. Accept either exact
-    import path, while keeping the proof bound to the decorator implementation
-    and source snapshot. The class-only branch is unreachable for a function.
-    """
     decorators = [node for node in function.node.decorator_list
                   if isinstance(node, ast.Attribute) and node.attr == 'dedent_interpd'
                   and isinstance(node.value, ast.Name)
@@ -95,6 +113,7 @@ def matplotlib_docstring_function_binding(context, analysis, function, fact):
 
     # The decorator's module object is imported directly and not rebound in the
     # defining module's top-level namespace.
+    # 装饰器模块对象由直接导入取得，且未在定义模块的顶层命名空间重新绑定。
     imports = [node for node in patch_tree.body if isinstance(node, ast.ImportFrom)
                and node.level == 1 and node.module is None
                and any(item.name == alias and item.asname is None for item in node.names)]
@@ -139,6 +158,7 @@ def matplotlib_docstring_function_binding(context, analysis, function, fact):
 
     # Ensure stdlib inspect and the relevant builtin names are not rebound by
     # this module's top-level source.
+    # 确认本模块顶层源码没有重新绑定标准库inspect或相关内建名称。
     inspect_imports = [node for node in doc_tree.body if isinstance(node, ast.Import)
                        and any(alias.name == "inspect" and alias.asname is None
                                for alias in node.names)]
@@ -159,12 +179,15 @@ def matplotlib_docstring_function_binding(context, analysis, function, fact):
             "returned_object": "original_function", "mutated_function_attribute": "__doc__"}
 
 
+## Prove a bounded Matplotlib keyword-only decorator forwards unchanged
+## 证明受限的Matplotlib装饰器在关键字调用路径上保持转发
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param analysis PCResolve analysis result being validated or consumed.
+#  @param function Indexed source function under analysis.
+#  @param positional_count Number of positional arguments supplied.
+#  @return Result of the `matplotlib_keyword_only_method_binding` operation.
 def matplotlib_keyword_only_method_binding(context, analysis, function, positional_count):
-    """Prove a bounded Matplotlib keyword-only decorator forwards unchanged.
-
-    The same proof applies when the method also has the known docstring
-    decorator, which preserves the wrapper object on normal function calls.
-    """
     if (function.identity.module != "matplotlib.patches"
             or type(positional_count) is not int or positional_count < 0):
         return None
@@ -191,6 +214,12 @@ def matplotlib_keyword_only_method_binding(context, analysis, function, position
                  if item.get("function", {}).get("module") == function.identity.module
                  and item.get("function", {}).get("qualname") == function.identity.qualname]
     effects = summaries[0].get("decorator_effects", ()) if len(summaries) == 1 else ()
+    ## Check whether the decorator effect matches the selected source expression
+    ## 检查装饰器效果是否匹配选定的源码表达式
+    #
+    #  @param effect Value named `effect` supplied by the enclosing analysis.
+    #  @param node AST node or source expression being analyzed.
+    #  @return Boolean indicating whether the requested condition holds.
     def matches_expression(effect, node):
         expression = effect.get('expression', {}) if isinstance(effect, dict) else {}
         return (expression.get('file_path') == str(function.identity.file_path)
@@ -323,6 +352,11 @@ def matplotlib_keyword_only_method_binding(context, analysis, function, position
         "warning_branch_taken": not warning_guard_false}
 
 
+## Collect names bound by a source expression
+## 收集源码表达式绑定的名称
+#
+#  @param node AST node or source expression being analyzed.
+#  @return Result of the `_bound_names` operation.
 def _bound_names(node):
     names = set()
     if isinstance(node, ast.Assign):

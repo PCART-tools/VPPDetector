@@ -1,3 +1,7 @@
+## @package vppdetector.scanner
+#  Whole-package and on-demand scans over the shared detection core.
+#  基于共享检测核心执行全包扫描和按需扫描。
+
 """Whole-package and on-demand scopes over the same VPP detection core."""
 
 from __future__ import annotations
@@ -30,15 +34,21 @@ from .models import (
 from .source import IndexedFunction, SourceIndex
 
 
+## Scan every eligible function in one library source snapshot
+## 扫描单个库源码快照中的所有可分析函数
+#
+#  @param package_root Library source directory or standalone Python file
+#  @param import_roots Optional module roots used for import resolution
+#  @param max_depth Maximum forwarding depth; must be positive
+#  @param context Optional reusable analysis context for the same source snapshot
+#  @return ScanReport containing findings, boundaries and coverage
 def scan_package(
-    package_root: ScanSource,
+    package_root,
     *,
-    import_roots: Optional[Sequence[PathLike]] = None,
-    max_depth: int = 5,
-    context: Optional[AnalysisContext] = None,
-) -> ScanReport:
-    """Find VPPs in one library version, optionally reusing analysis state."""
-
+    import_roots=None,
+    max_depth=5,
+    context=None,
+):
     _validate_depth(max_depth)
     index, context = _prepare_context(package_root, import_roots, context)
     if index.is_api_scope:
@@ -49,21 +59,23 @@ def scan_package(
     return _scan_entries(context, entries, max_depth=max_depth)
 
 
+## Scan one requested API and its reachable forwarding path
+## 扫描指定API及其可达的参数转发路径
+#
+#  @param package_root Library source directory or standalone Python file
+#  @param target_api Source identity of the requested API
+#  @param import_roots Optional module roots used for import resolution
+#  @param max_depth Maximum forwarding depth; must be positive
+#  @param context Optional reusable analysis context for the same source snapshot
+#  @return ScanReport scoped to the requested API
 def scan_api(
-    package_root: ScanSource,
-    target_api: FunctionIdentity,
+    package_root,
+    target_api,
     *,
-    import_roots: Optional[Sequence[PathLike]] = None,
-    max_depth: int = 5,
-    context: Optional[AnalysisContext] = None,
-) -> ScanReport:
-    """Find VPPs reachable from one API without assessing a client call.
-
-    API identity resolution may follow imports, aliases and inherited methods.
-    The requested API stays attached to findings while path steps identify the
-    actual source implementations.
-    """
-
+    import_roots=None,
+    max_depth=5,
+    context=None,
+):
     _validate_depth(max_depth)
     index, context = _prepare_context(package_root, import_roots, context)
     if not index.files:
@@ -118,17 +130,24 @@ def scan_api(
     )
 
 
+## Scan selected indexed functions and assemble findings, boundaries and coverage
+## 扫描选定的索引函数并汇总发现、边界及覆盖信息
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param entries Input value of type `Sequence[IndexedFunction]`.
+#  @param max_depth Maximum number of forwarding steps to analyze.
+#  @return Result of type `ScanReport`.
 def _scan_entries(
-    context: AnalysisContext,
-    entries: Sequence[IndexedFunction],
+    context,
+    entries,
     *,
-    max_depth: int,
-) -> ScanReport:
-    variadic_functions: List[VariadicFunction] = []
-    findings: List[ForwardingFinding] = []
-    boundaries: List[AnalysisBoundary] = list(context.index.boundaries)
-    coverage: List[VariadicCoverage] = []
-    schema_version: Optional[str] = None
+    max_depth,
+):
+    variadic_functions = []
+    findings = []
+    boundaries = list(context.index.boundaries)
+    coverage = []
+    schema_version = None
     for entry in entries:
         if not entry.variadic_parameters:
             continue
@@ -147,6 +166,8 @@ def _scan_entries(
                 and boundary.function == entry.identity
                 for boundary in channel_boundaries
             )
+
+            # 区分分析不可用、存在已知边界以及没有已知边界
             status = (
                 ScanCoverageStatus.UNAVAILABLE if unavailable else
                 ScanCoverageStatus.LIMITED if channel_boundaries else
@@ -170,7 +191,12 @@ def _scan_entries(
     )
 
 
-def _empty_source_report(index: SourceIndex) -> ScanReport:
+## Build a report explaining that the source scope contains no Python files
+## 构建说明源码作用域中没有Python文件的报告
+#
+#  @param index Source index used for definitions and imports.
+#  @return Result of type `ScanReport`.
+def _empty_source_report(index):
     return ScanReport(
         source=index.source,
         functions_scanned=0,
@@ -186,9 +212,17 @@ def _empty_source_report(index: SourceIndex) -> ScanReport:
     )
 
 
+## Build a report for an API that cannot be resolved to one implementation
+## 为无法解析到唯一实现的API构建报告
+#
+#  @param index Source index used for definitions and imports.
+#  @param target_api Source identity of the API being analyzed.
+#  @param code Input value of type `str`.
+#  @param message Input value of type `str`.
+#  @return Result of type `ScanReport`.
 def _missing_api_report(
-    index: SourceIndex, target_api: FunctionIdentity, code: str, message: str
-) -> ScanReport:
+    index, target_api, code, message
+):
     return ScanReport(
         source=index.source,
         functions_scanned=0,

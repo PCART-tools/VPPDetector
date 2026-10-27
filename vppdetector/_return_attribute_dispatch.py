@@ -1,3 +1,7 @@
+## @package vppdetector._return_attribute_dispatch
+#  Resolve return-selected attributes on source-bound methods.
+#  解析源码绑定方法返回值所选择的属性。
+
 """Resolve a source method call whose return selects typed owner attributes."""
 
 from __future__ import annotations
@@ -11,6 +15,12 @@ from .models import FunctionIdentity
 from .source import build_source_index
 
 
+## Resolve the class AST node for a source identity
+## 解析源码身份对应的类AST节点
+#
+#  @param index Source index used for definitions and imports.
+#  @param identity Source-level identity used for lookup.
+#  @return Result of the `_class_node` operation.
 def _class_node(index, identity):
     path = identity.file_path
     if path is None:
@@ -33,6 +43,12 @@ def _class_node(index, identity):
     return found
 
 
+## Read the supported type declaration for a field parameter
+## 读取字段参数对应的受支持类型声明
+#
+#  @param class_node Value named `class_node` supplied by the enclosing analysis.
+#  @param parameter Parameter name or parameter fact being checked.
+#  @return Result of the `_type_doc` operation.
 def _type_doc(class_node, parameter):
     doc = ast.get_docstring(class_node) or ''
     pattern = re.compile(r'^\s*([A-Za-z_]\w*)\s*:\s*(\S.*)$')
@@ -47,6 +63,12 @@ def _type_doc(class_node, parameter):
     return None
 
 
+## Resolve the parameter that declares a class field
+## 解析声明类字段的参数
+#
+#  @param class_node Value named `class_node` supplied by the enclosing analysis.
+#  @param field Field name whose source or report value is accessed.
+#  @return Result of the `_field_parameter` operation.
 def _field_parameter(class_node, field):
     assignments = []
     initializer = None
@@ -71,6 +93,13 @@ def _field_parameter(class_node, field):
     return parameter if any(item.arg == parameter for item in parameters) else None
 
 
+## Return the source-resolved class hierarchy without cycles
+## 返回源码解析出的无环类继承层次
+#
+#  @param index Source index used for definitions and imports.
+#  @param identity Source-level identity used for lookup.
+#  @param seen Value named `seen` supplied by the enclosing analysis.
+#  @return Result of the `_class_hierarchy` operation.
 def _class_hierarchy(index, identity, seen=()):
     if identity in seen or len(seen) > 16:
         return None
@@ -91,6 +120,13 @@ def _class_hierarchy(index, identity, seen=()):
     return result
 
 
+## Resolve the class selected by a source call expression
+## 解析源码调用表达式所选择的类
+#
+#  @param index Source index used for definitions and imports.
+#  @param identity Source-level identity used for lookup.
+#  @param expression Value named `expression` supplied by the enclosing analysis.
+#  @return Result of the `_called_class` operation.
 def _called_class(index, identity, expression):
     if not isinstance(expression, ast.Call):
         return None
@@ -110,6 +146,13 @@ def _called_class(index, identity, expression):
     return index.resolve_class(FunctionIdentity(module, class_name))
 
 
+## Resolve the declaring class for one inherited field
+## 解析某个继承字段的声明类
+#
+#  @param index Source index used for definitions and imports.
+#  @param owner_identity Value named `owner_identity` supplied by the enclosing analysis.
+#  @param field Field name whose source or report value is accessed.
+#  @return Result of the `_field_class` operation.
 def _field_class(index, owner_identity, field):
     hierarchy = _class_hierarchy(index, owner_identity)
     if not hierarchy:
@@ -137,6 +180,13 @@ def _field_class(index, owner_identity, field):
     return None
 
 
+## Find a unique method implementation in the class hierarchy
+## 在类继承层次中查找唯一的方法实现
+#
+#  @param index Source index used for definitions and imports.
+#  @param class_identity Identity of the source class.
+#  @param name Name to match or validate in the current scope.
+#  @return Result of the `_method_in_hierarchy` operation.
 def _method_in_hierarchy(index, class_identity, name):
     hierarchy = _class_hierarchy(index, class_identity)
     if not hierarchy:
@@ -147,8 +197,15 @@ def _method_in_hierarchy(index, class_identity, name):
     return selected[0] if selected else None
 
 
+## Follow one exact source-return attribute chain to a unique method body
+## 沿精确的源码返回属性链解析唯一的方法函数体
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param caller Source identity of the calling function.
+#  @param analysis PCResolve analysis result being validated or consumed.
+#  @param call_node AST node for the original call.
+#  @return Result of the `returned_attribute_method` operation.
 def returned_attribute_method(context, caller, analysis, call_node):
-    """Follow one exact source-return attribute chain to a unique method body."""
     if (not isinstance(call_node.func, ast.Attribute)
             or not isinstance(call_node.func.value, ast.Call)
             or not isinstance(call_node.func.value.func, ast.Attribute)
@@ -187,6 +244,8 @@ def returned_attribute_method(context, caller, analysis, call_node):
     receiver_parameter = _field_parameter(owner_node, receiver_field)
     if receiver_parameter is None:
         return None
+
+    # 仅沿源码文档中可定位的接收者类型继续解析返回属性
     documented_type = _type_doc(owner_node, receiver_parameter)
     if documented_type is None:
         return None
@@ -218,4 +277,6 @@ def returned_attribute_method(context, caller, analysis, call_node):
         if target is None or target.is_overload:
             return None
         method_targets.append(target.identity)
+
+    # 所有返回属性都解析到同一方法时才确定调用目标
     return method_targets[0] if all(item == method_targets[0] for item in method_targets) else None

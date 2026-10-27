@@ -1,3 +1,7 @@
+## @package vppdetector._decorator_exceptions
+#  Read exception translation in supported decorator proofs.
+#  读取受支持装饰器证明中的异常转换信息。
+
 """Read source exception translations inside an otherwise closed decorator proof."""
 
 from __future__ import annotations
@@ -8,17 +12,31 @@ from pcresolve.effect_facts import builtin_exception_translation
 
 from ._program_facts import identity_from_target
 
+
 _FIELDS = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 
 
+## Check whether an exception record matches the requested source location
+## 检查异常记录是否匹配请求的源码位置
+#
+#  @param record Producer record whose fields are validated.
+#  @param identity Source-level identity used for lookup.
+#  @param node AST node or source expression being analyzed.
+#  @return Boolean indicating whether the requested condition holds.
 def _matches(record, identity, node):
     return (isinstance(record, dict) and record.get('file_path') == str(identity.file_path)
             and all(type(record.get(key)) is int and record[key] == getattr(node, key)
                     for key in _FIELDS))
 
 
+## Validate the reached raise and any exception-only handler/source premise
+## 验证到达的异常抛出及异常处理路径的源码前提
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param fact Producer fact being validated or interpreted.
+#  @param effect Value named `effect` supplied by the enclosing analysis.
+#  @return Result of the `exception_raise_binding` operation.
 def exception_raise_binding(context, fact, effect):
-    """Validate the reached raise and any exception-only handler/source premise."""
     identity = identity_from_target(effect.get('function'))
     function = context.index.find(identity) if identity is not None else None
     if function is None:

@@ -1,3 +1,7 @@
+## @package vppdetector._context_manager_propagation
+#  Validate bounded generator context-manager propagation.
+#  校验有界的生成器上下文管理器异常传播路径。
+
 """Validate a narrow source proof that a generator context manager rethrows."""
 
 from __future__ import annotations
@@ -8,24 +12,33 @@ import hashlib
 from .models import FunctionIdentity
 
 
+## Convert source coordinates into a validated source span
+## 将源码坐标转换为经过校验的源码范围
+#
+#  @param node AST node or source expression being analyzed.
+#  @return Result of the `_span` operation.
 def _span(node):
     return (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
 
 
+## Check whether a statement tree contains an exception handler
+## 检查语句树中是否包含异常处理器
+#
+#  @param node AST node or source expression being analyzed.
+#  @return Result of the `_contains_except` operation.
 def _contains_except(node):
     return any(isinstance(child, ast.ExceptHandler) for child in ast.walk(node))
 
 
+## Prove this exact ``with`` uses a transparent contextlib generator
+## 证明该with语句使用透明的contextlib生成器上下文管理器
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param analysis PCResolve analysis result being validated or consumed.
+#  @param caller Source identity of the calling function.
+#  @param statement Value named `statement` supplied by the enclosing analysis.
+#  @return Result of the `rethrows_with_body` operation.
 def rethrows_with_body(context, analysis, caller, statement):
-    """Prove this exact ``with`` uses a transparent contextlib generator.
-
-    The bound context-manager factory must be a single source generator with
-    one yield inside try/finally and no exception handler. The manager's only
-    temporary mutation must be unrelated to values read or written in the
-    protected body. This proves exception non-suppression, not that executing
-    arbitrary entry/cleanup operations cannot raise.
-    """
-
     if (not isinstance(statement, ast.With) or len(statement.items) != 1
             or statement.items[0].optional_vars is not None):
         return None
@@ -42,7 +55,9 @@ def rethrows_with_body(context, analysis, caller, statement):
             or not isinstance(manager.keywords[0].value, ast.Constant)
             or manager.keywords[0].value.value is not False):
         return None
+
     # The transient eventson assignment must not influence the guarded body.
+    # 临时eventson赋值不能影响受守卫控制的函数体。
     if any(isinstance(node, ast.Attribute) and node.attr == 'eventson'
            for node in ast.walk(ast.Module(body=statement.body, type_ignores=[]))):
         return None
@@ -90,8 +105,10 @@ def rethrows_with_body(context, analysis, caller, statement):
     alias = decorator[0].value.id
     if context.index.imports.get(helper.identity.module, {}).get(alias) != 'contextlib':
         return None
+
     # PCResolve's namespace proof excludes rebinding/monkeypatching of the
     # imported stdlib decorator throughout the indexed source package.
+    # PCResolve的命名空间证明确认整个索引源码包内没有重绑定或猴子补丁修改该标准库装饰器。
     try:
         from pcresolve._contextmanager_namespace import _namespace
         if not _namespace(context.adapter._analyzer):
@@ -120,8 +137,10 @@ def rethrows_with_body(context, analysis, caller, statement):
             or _contains_except(helper.node)
             or any(isinstance(node, (ast.Return, ast.Raise)) for node in tries[0].finalbody)):
         return None
+
     # A try/finally rethrows an exception injected at yield unless an except
     # handler or a return in cleanup suppresses it. Neither is present.
+    # yield处注入的异常会由try/finally重新抛出，除非except处理器或清理阶段的return将其抑制；当前两者均不存在。
     return {
         'with_id': with_id,
         'manager': FunctionIdentity('matplotlib.cbook', '_setattr_cm'),

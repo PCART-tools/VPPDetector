@@ -1,3 +1,7 @@
+## @package vppdetector.models
+#  Source identities, findings and parameter-level evidence models.
+#  定义源码身份、检测结果及参数级证据模型。
+
 """Source identities, structural findings and parameter-level evidence."""
 
 from __future__ import annotations
@@ -12,15 +16,23 @@ from typing import Optional, Tuple, Union
 class StringEnum(str, Enum):
     """Enum whose values remain convenient at CLI and report boundaries."""
 
-    def __str__(self) -> str:
+    ## Return the enum value used at report and CLI boundaries
+    ## 返回报告和命令行边界使用的枚举值
+    #
+    #  @return Result of type `str`.
+    def __str__(self):
         return self.value
 
 
+## Identify whether a variadic parameter captures positional or keyword arguments.
+## 标识可变参数捕获的是位置实参还是关键字实参。
 class VariadicKind(StringEnum):
     POSITIONAL = "var_positional"
     KEYWORD = "var_keyword"
 
 
+## Identify the supported parameter change operation.
+## 标识受支持的参数变更操作。
 class ChangeKind(StringEnum):
     DELETE = "delete"
     RENAME = "rename"
@@ -53,7 +65,11 @@ class ParameterChange:
     new_name: Optional[str] = None
     old_position: Optional[int] = None
 
-    def __post_init__(self) -> None:
+    ## Validate and normalize the immutable call-context fields
+    ## 校验并规范化不可变调用上下文字段
+    #
+    #  @return Result of type `None`.
+    def __post_init__(self):
         object.__setattr__(self, "kind", ChangeKind(self.kind))
         if not self.old_name.isidentifier():
             raise ValueError("old_name must be a parameter name")
@@ -86,6 +102,8 @@ class FunctionIdentity:
     lineno: Optional[int] = None
 
 
+## Represent a complete source range with start and end coordinates.
+## 表示带有起止坐标的完整源码范围。
 @dataclass(frozen=True)
 class SourceSpan:
     file_path: Path
@@ -275,7 +293,11 @@ class CallContext:
     observed_capture_rejections: Tuple[ObservedCaptureRejection, ...] = ()
     observed_fixed_bindings: Tuple[ObservedFixedBinding, ...] = ()
 
-    def __post_init__(self) -> None:
+    ## Validate and normalize the immutable call-context fields
+    ## 校验并规范化不可变调用上下文字段
+    #
+    #  @return Result of type `None`.
+    def __post_init__(self):
         if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
             raise ValueError("bound_receiver must be bool or None")
         names = [name for name, _ in self.known_values]
@@ -353,6 +375,8 @@ class ParameterAssessment:
     callsite: Optional[SourceSpan] = None
 
 
+## Report one indexed source function and its variadic channels.
+## 报告一个已索引源码函数及其可变参数通道。
 @dataclass(frozen=True)
 class VariadicFunction:
     function: FunctionIdentity
@@ -417,15 +441,18 @@ class ScanReport:
     target_api: Optional[FunctionIdentity] = None
     resolved_api: Optional[FunctionIdentity] = None
     coverage: Tuple[VariadicCoverage, ...] = ()
-
+    ## Whether this scan found a VPP; false does not prove full coverage
+    ## 判断扫描是否发现VPP；False不代表分析覆盖完整
+    #
+    #  @return Result of type `bool`.
     @property
-    def has_vpp(self) -> bool:
-        """Whether this scan found a VPP; false does not prove full coverage."""
-
+    def has_vpp(self):
         return bool(self.findings)
 
+    ## Compatibility alias for the positive findings collection
+    ## 提供兼容旧调用方的潜在问题只读别名
+    #
+    #  @return Result of type `Tuple[ForwardingFinding, ...]`.
     @property
-    def potential_pitfalls(self) -> Tuple[ForwardingFinding, ...]:
-        """Compatibility alias for the positive findings collection."""
-
+    def potential_pitfalls(self):
         return self.findings

@@ -1,3 +1,7 @@
+## @package vppdetector._container_predicates
+#  Validate observations against supported container predicates.
+#  将运行观测与受支持的容器条件进行核对。
+
 """Validate execution evidence against neutral source-predicate obligations."""
 
 from __future__ import annotations
@@ -13,6 +17,11 @@ from ._program_facts import identity_from_target
 from .models import FunctionIdentity, SourceSpan
 
 
+## Read the supported callable descriptor from a source node
+## 从源码节点读取受支持的可调用描述符
+#
+#  @param node AST node or source expression being analyzed.
+#  @return Result of the `_descriptor` operation.
 def _descriptor(node):
     negated = False
     while isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -42,8 +51,15 @@ def _descriptor(node):
     return None
 
 
+## Require call scope, original-element provenance, completion and source agreement
+## 核对调用范围、原始元素来源、执行完成及源码证据
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param entry Resolved source entry for the requested API.
+#  @param call Original client call or its call-specific evidence.
+#  @param change Description of the removed or renamed parameter.
+#  @return Result of the `container_predicate` operation.
 def container_predicate(context, entry, call, change):
-    """Require call scope, original-element provenance, completion and source agreement."""
     if len(call.observed_container_predicates) != 1:
         return None
     observed = call.observed_container_predicates[0]
@@ -66,12 +82,15 @@ def container_predicate(context, entry, call, change):
     elif (type(observed.selection) is not int
           or not 0 <= observed.selection < observed.container_size):
         return None
+
+    # 位置容器中的索引需扣除固定参数和隐式接收者
     if observed.container_kind == 'tuple':
         bound = entry.is_bound_method if call.bound_receiver is None else call.bound_receiver
         fixed = len(entry.node.args.posonlyargs + entry.node.args.args)
         fixed -= int(bound and fixed > 0)
         if change.old_position is None or observed.selection != change.old_position - fixed:
             return None
+
     checker = context.index.find(observed.checker)
     if checker is None or checker.identity != observed.checker:
         return None
@@ -91,6 +110,9 @@ def container_predicate(context, entry, call, change):
         analysis = context.adapter.analyze(checker.identity)
     except (OSError, TypeError, ValueError, ResolutionError):
         return None
+
+
+    # 仅将观察结果用于源码位置和静态容器谓词事实均匹配的检查
     summaries = [f for f in analysis.functions
                  if identity_from_target(f.get('function')) == checker.identity]
     if len(summaries) != 1:
@@ -102,9 +124,11 @@ def container_predicate(context, entry, call, change):
     if (span.file_path != checker.identity.file_path or any(type(getattr(span, field)) is not int
             for field in ('lineno', 'col_offset', 'end_lineno', 'end_col_offset'))):
         return None
+
     expected_span = {'file_path': str(checker.identity.file_path), 'lineno': span.lineno,
                      'col_offset': span.col_offset, 'end_lineno': span.end_lineno,
                      'end_col_offset': span.end_col_offset}
+
     candidates = []
     for node in ast.walk(checker.node):
         if not isinstance(node, ast.If):
@@ -121,6 +145,7 @@ def container_predicate(context, entry, call, change):
     guard_span = {'file_path': str(checker.identity.file_path), 'lineno': guard.lineno,
                   'col_offset': guard.col_offset, 'end_lineno': guard.end_lineno,
                   'end_col_offset': guard.end_col_offset}
+
     descriptor = _descriptor(selected)
     parameters = set(checker.signature.positional_only + checker.signature.positional_or_keyword
                      + checker.signature.keyword_only)
@@ -145,6 +170,7 @@ def container_predicate(context, entry, call, change):
         matched.append(fact)
     if descriptor is None or len(matched) != 1:
         return None
+
     operation, _, negated, detail = descriptor
     if operation == 'contains':
         key = detail['key']

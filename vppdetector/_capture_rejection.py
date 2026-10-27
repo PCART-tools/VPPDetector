@@ -1,3 +1,7 @@
+## @package vppdetector._capture_rejection
+#  Validate source guards that reject captured keyword arguments.
+#  校验拒绝已捕获关键字参数的源码守卫。
+
 """Validate actual nonempty-dictionary rejection against neutral source guards."""
 
 from __future__ import annotations
@@ -12,15 +16,31 @@ from ._program_facts import identity_from_target
 from .models import FunctionIdentity, SourceSpan
 
 
+## Convert source coordinates into a validated source span
+## 将源码坐标转换为经过校验的源码范围
+#
+#  @param path Filesystem path of the source being read or checked.
+#  @param node AST node or source expression being analyzed.
+#  @return Result of the `_span` operation.
 def _span(path, node):
     return dict(file_path=str(path), lineno=node.lineno, col_offset=node.col_offset,
                 end_lineno=node.end_lineno, end_col_offset=node.end_col_offset)
 
 
+## Require a reached guard, original-key provenance and the actual escaping exception
+## 验证守卫已执行、原始键来源及异常实际向外传播
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param entry Resolved source entry for the requested API.
+#  @param call Original client call or its call-specific evidence.
+#  @param change Description of the removed or renamed parameter.
+#  @param original Value named `original` supplied by the enclosing analysis.
+#  @return Result of the `capture_rejection` operation.
 def capture_rejection(context, entry, call, change, original):
-    """Require a reached guard, original-key provenance and the actual escaping exception."""
     if len(call.observed_capture_rejections) != 1:
         return None
+
+    # 观察记录必须对应同一调用和所选参数，且异常未被捕获
     observed = call.observed_capture_rejections[0]
     if (not isinstance(observed.entry, FunctionIdentity) or observed.entry != entry.identity
             or not isinstance(observed.checker, FunctionIdentity)
@@ -38,6 +58,7 @@ def capture_rejection(context, entry, call, change, original):
             or not isinstance(observed.source_hashes, tuple)
             or not 1 <= len(observed.source_hashes) <= 2000):
         return None
+
     checker = context.index.find(observed.checker)
     if checker is None or checker.identity != observed.checker:
         return None
@@ -51,9 +72,11 @@ def capture_rejection(context, entry, call, change, original):
                     or type(digest) is not str
                     or hashlib.sha256(path.read_bytes()).hexdigest() != digest):
                 return None
+
         analysis = context.adapter.analyze(checker.identity)
     except (OSError, TypeError, ValueError, ResolutionError):
         return None
+
     summaries = [f for f in analysis.functions
                  if identity_from_target(f.get('function')) == checker.identity]
     if len(summaries) != 1:
@@ -66,6 +89,9 @@ def capture_rejection(context, entry, call, change, original):
                 or any(type(getattr(span, field)) is not int for field in (
                     'lineno', 'col_offset', 'end_lineno', 'end_col_offset'))):
             return None
+
+
+    # 在已校验的源码快照中核对守卫与抛出语句，再匹配静态事实
     guard_span = _span(checker.identity.file_path, observed.guard_span)
     raise_span = _span(checker.identity.file_path, observed.raise_span)
     candidates = [n for n in ast.walk(checker.node) if isinstance(n, ast.If)
@@ -91,6 +117,7 @@ def capture_rejection(context, entry, call, change, original):
             or len(raised.exc.args) > 1 or any(not isinstance(a, ast.Constant)
                 or type(a.value) is not str for a in raised.exc.args)):
         return None
+
     matching = [f for f in facts if isinstance(f, dict)
                 and f.get('kind') == 'capture_truth_rejection'
                 and f.get('status') == 'requires_observation'

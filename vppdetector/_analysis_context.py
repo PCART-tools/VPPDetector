@@ -1,3 +1,7 @@
+## @package vppdetector._analysis_context
+#  Fixed source preparation and reusable analysis state.
+#  管理固定源码快照及可复用的分析状态。
+
 """Fixed source preparation and shared facts, independent of scan/assess policy."""
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from ._program_facts import (
 from ._source_queries import SourceQueries
 from .models import FunctionIdentity, SourceContext
 from .source import IndexedFunction, SourceIndex, build_source_index, normalized_import_roots
+
 
 PathLike = Union[str, Path]
 ScanSource = Union[PathLike, SourceContext]
@@ -34,37 +39,57 @@ class AnalysisContext:
     _dispatch_context_cache: dict = field(default_factory=dict, init=False, repr=False)
     _source_queries: SourceQueries = field(default_factory=SourceQueries, init=False, repr=False)
 
+    ## Build a reusable analysis context from a source context
+    ## 根据源码上下文构建可复用的分析上下文
+    #
+    #  @param source Library source directory, file, or source context.
+    #  @return Result of type `'AnalysisContext'`.
     @classmethod
-    def from_source(cls, source: SourceContext) -> "AnalysisContext":
+    def from_source(cls, source):
         return cls.from_index(build_source_index(source))
 
+    ## Prepare a located API and its explicit package-local import closure
+    ## 准备指定API及其明确的包内导入闭包
+    #
+    #  @param source Library source directory, file, or source context.
+    #  @param target_api Source identity of the API being analyzed.
+    #  @return Result of type `'AnalysisContext'`.
     @classmethod
-    def for_api(cls, source: SourceContext, target_api: FunctionIdentity) -> "AnalysisContext":
-        """Prepare a located API and its explicit package-local import closure.
-
-        Without a file hint, retain full-source preparation. Reuse this context
-        only for APIs whose implementations/dependencies are in its fixed file
-        set and only while the source snapshot remains unchanged.
-        """
-
+    def for_api(cls, source, target_api):
         return cls.from_index(build_source_index(source, target_api=target_api))
 
+    ## Build analysis state from an already prepared source index
+    ## 根据已准备的源码索引构建分析状态
+    #
+    #  @param index Source index used for definitions and imports.
+    #  @return Result of type `'AnalysisContext'`.
     @classmethod
-    def from_index(cls, index: SourceIndex) -> "AnalysisContext":
+    def from_index(cls, index):
         context = cls(index=index, adapter=PCResolveAdapter(index))
+
+        # Share only the producer's validated source documents; query results stay local.
+        # 仅共享生产者校验过的源码文档，查询结果仍属于当前上下文。
         context._source_queries = SourceQueries(index.source_store)
         return context
 
-    def resolve_api(self, identity: FunctionIdentity) -> Optional[IndexedFunction]:
+    ## Resolve the requested API to one source implementation with checked entry facts
+    ## 将请求的API解析为唯一源码实现并校验入口事实
+    #
+    #  @param identity Source-level identity used for lookup.
+    #  @return Result of type `Optional[IndexedFunction]`.
+    def resolve_api(self, identity):
         entry = self.index.find(identity)
         if entry is not None:
             return self._checked_entry(entry, identity)
         source_class = self.index.resolve_class(identity)
+
         # Assess callers often identify a constructor by its implementation
         # (`Widget.__init__`) rather than by the class (`Widget`).  Entry
         # binding is a class-call fact, so resolve that exact owning class
         # before falling back to inherited method lookup.  Preserve file and
         # line hints: they identify the PCBench source version being assessed.
+        # 调用方可能用构造器实现（`Widget.__init__`）而非类名标识目标；入口绑定属于类调用事实，
+        # 因此先解析所属类，再尝试继承方法查找，并保留用于定位PCBench源码版本的文件和行号。
         if source_class is None and identity.qualname.endswith('.__init__'):
             owner = identity.qualname.rpartition('.')[0]
             if owner:
@@ -93,8 +118,10 @@ class AnalysisContext:
             entry = self.index.find(identity_from_target(analysis.entry))
             return (self._checked_entry(replace(entry, query_alias=identity), identity, analysis)
                     if entry and source_alias_entry(analysis, identity) else None)
+
         # Resolve the public class prefix before asking PCResolve for an
         # inherited implementation. Never fall back to a terminal name match.
+        # 查询继承实现前先解析公开类前缀；绝不回退到仅按末尾名称匹配。
         method = self.index.resolve_method_identity(identity)
         analysis = self.adapter.analyze(method or identity)
         entry = self.index.find(identity_from_target(analysis.entry))
@@ -109,10 +136,16 @@ class AnalysisContext:
                 replace(entry, query_alias=method or identity), identity, analysis)
         return self._checked_entry(entry, identity, analysis) if entry is not None else None
 
+    ## Reject an explicitly uncertain public lookup, separately from body facts
+    ## 将公开入口查找的不确定性与函数体事实分开校验
+    #
+    #  @param entry Resolved source entry for the requested API.
+    #  @param lookup Requested source identity for the lookup.
+    #  @param analysis PCResolve analysis result being validated or consumed.
+    #  @return Result of type `IndexedFunction`.
     def _checked_entry(
-        self, entry: IndexedFunction, lookup: FunctionIdentity, analysis=None,
-    ) -> IndexedFunction:
-        """Reject an explicitly uncertain public lookup, separately from body facts."""
+        self, entry, lookup, analysis=None,
+    ):
         analysis = analysis or self.adapter.analyze(entry.query_alias or entry.identity)
         root_name = lookup.qualname.partition('.')[0]
         records = analysis.inputs.get('module_global_rebindings')
@@ -147,11 +180,18 @@ class AnalysisContext:
         return entry
 
 
+## Validate or construct the source index and matching analysis context
+## 校验或构建源码索引及对应的分析上下文
+#
+#  @param package_root Root directory or file of the library source.
+#  @param import_roots Module roots used to resolve source imports.
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @return Result of type `tuple[SourceIndex, Optional[AnalysisContext]]`.
 def prepare_context(
-    package_root: ScanSource,
-    import_roots: Optional[Sequence[PathLike]],
-    context: Optional[AnalysisContext],
-) -> tuple[SourceIndex, Optional[AnalysisContext]]:
+    package_root,
+    import_roots,
+    context,
+):
     if isinstance(package_root, SourceContext):
         source = package_root
         if import_roots is not None:
@@ -175,8 +215,11 @@ def prepare_context(
     return index, AnalysisContext.from_index(index) if index.files else None
 
 
-def validate_depth(max_depth: int) -> None:
+## Require a positive integer forwarding-depth limit
+## 要求转发深度限制为正整数
+#
+#  @param max_depth Maximum number of forwarding steps to analyze.
+#  @return Result of type `None`.
+def validate_depth(max_depth):
     if isinstance(max_depth, bool) or not isinstance(max_depth, int) or max_depth < 1:
         raise ValueError("max_depth must be a positive integer")
-
-

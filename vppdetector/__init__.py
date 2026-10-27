@@ -1,3 +1,7 @@
+## @package vppdetector
+#  Public scan and assess interfaces backed by PCResolve.
+#  基于PCResolve事实提供公开的扫描与评估接口。
+
 """Whole-library and on-demand VPP detection backed by PCResolve facts."""
 
 from .assessment import assess_change
@@ -29,6 +33,7 @@ from .models import (
     VariadicKind,
 )
 from .scanner import scan_api, scan_package
+
 
 __all__ = [
     "AnalysisBoundary",
