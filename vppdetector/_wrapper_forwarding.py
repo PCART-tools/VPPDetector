@@ -7,7 +7,8 @@
 import ast
 
 from ._fresh_decoration import observation_guard
-from ._program_facts import identity_from_target
+from ._program_facts import identity_from_target, source_constructor_entry_binding
+from .models import FunctionIdentity
 
 
 _FIELDS = ("lineno", "col_offset", "end_lineno", "end_col_offset")
@@ -23,6 +24,47 @@ _ASSUMPTIONS = {
     "no_external_registry_mutation",
     "no_unmodeled_indirect_function_mutation",
 }
+
+
+## Check whether a source helper has a normal path without an explicit raise
+## 检查源码辅助函数是否存在不含显式抛出的正常路径
+#
+#  @param statements Statements in a source function body.
+#  @return Result of the `normal_completion` check.
+def _normal_completion(statements):
+    for statement in statements:
+        if isinstance(statement, ast.Raise):
+            return False
+        if isinstance(statement, ast.Return):
+            return True
+        if isinstance(statement, ast.If):
+            if not _normal_completion(statement.body) and not _normal_completion(statement.orelse):
+                return False
+    return True
+
+
+## Validate a source guard helper before following the wrapped call
+## 跟随包装调用前校验源码保护分支的辅助函数
+#
+#  @param context Reusable analysis context for the selected source snapshot.
+#  @param factory_identity Source identity of the wrapper factory.
+#  @param guard Guard statement executed before forwarding.
+#  @return Result of the `guard_helper` validation.
+def _guard_helper_can_complete(context, factory_identity, guard):
+    if (not isinstance(guard, ast.If) or len(guard.body) != 1
+            or not isinstance(guard.body[0], ast.Expr)
+            or not isinstance(guard.body[0].value, ast.Call)):
+        return False
+    callee = guard.body[0].value.func
+    if not isinstance(callee, (ast.Name, ast.Attribute)):
+        return False
+    requested = FunctionIdentity(factory_identity.module, ast.unparse(callee))
+    helper = context.index.find(requested) or context.index.resolve_imported(requested)
+    return bool(helper and not any(isinstance(node, ast.Raise)
+                                   for node in ast.walk(helper.node))
+                and _normal_completion(helper.node.body))
+
+
 ## Return a forwarding fact only for its supported actual positional count
 ## 仅在实际位置参数数量符合支持条件时返回转发事实
 #
@@ -42,6 +84,17 @@ def binding(context, analysis, function, positional_count):
     if len(summaries) != 1:
         return None
     records = summaries[0].get("source_wrapper_forwarding")
+    identity_factory_chain = False
+    if not records and function.query_class is not None:
+        entry = source_constructor_entry_binding(analysis, function.query_class)
+        if (entry is not None
+                and identity_from_target(entry.get('target')) == function.identity
+                and 'source_callable_object_identity_decorator' in entry.get('assumptions', ())
+                and 'source_identity_decorator_over_source_factory_wrapper'
+                    in entry.get('assumptions', ())):
+            wrapper = entry.get('constructor_wrapper_forwarding')
+            records = [wrapper] if isinstance(wrapper, dict) else ()
+            identity_factory_chain = bool(records)
     if (
         not isinstance(records, (list, tuple))
         or len(records) != 1
@@ -49,6 +102,13 @@ def binding(context, analysis, function, positional_count):
     ):
         return None
     fact = records[0]
+    decorators = function.node.decorator_list
+    if len(decorators) == 1:
+        factory_decorator = decorators[0]
+    elif len(decorators) == 2 and identity_factory_chain:
+        factory_decorator = decorators[-1]
+    else:
+        factory_decorator = None
     forwarding, claims = fact.get("forwarding"), fact.get("assumptions")
     if (
         fact.get("kind") != "source_function_factory_wrapper_creation"
@@ -70,13 +130,11 @@ def binding(context, analysis, function, positional_count):
         or any(not isinstance(value, str) for value in claims)
         or not _ASSUMPTIONS.issubset(claims)
         or observation_guard(context, analysis, fact) is None
-        or len(function.node.decorator_list) != 1
+        or factory_decorator is None
     ):
         return None
     maximum = forwarding.get("maximum_positional_count")
-    if maximum is not None and (
-        type(maximum) is not int or maximum < 0 or positional_count > maximum
-    ):
+    if maximum is not None and (type(maximum) is not int or maximum < 0):
         return None
 
     ## Validate the producer witness required by the enclosing proof
@@ -97,7 +155,7 @@ def binding(context, analysis, function, positional_count):
         )
 
     if not witness(
-        fact.get("factory_evidence"), function.identity, function.node.decorator_list[0]
+        fact.get("factory_evidence"), function.identity, factory_decorator
     ):
         return None
 
@@ -143,6 +201,9 @@ def binding(context, analysis, function, positional_count):
             or test.left.args[0].id != args.vararg.arg
             or not isinstance(test.comparators[0], ast.Name)
         ):
+            return None
+        if positional_count > maximum and not _guard_helper_can_complete(
+                context, factory_identity, body[0]):
             return None
         body = body[1:]
     if (
