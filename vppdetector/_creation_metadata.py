@@ -297,7 +297,36 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
                    or len(digest) != 64 or any(char not in '0123456789abcdef' for char in digest)
                    for path, digest in supporting.items())):
         return False
-    if not _signature_creations(hook, {**primary, **supporting}):
+    complete_hashes = {**primary, **supporting}
+    if hook.get('signature_creations') is None:
+        nested_signatures, nested_callers = [], []
+        for query in hook.get('class_metadata_queries', ()):
+            if (not isinstance(query, dict)
+                    or query.get('kind') != 'source_class_creation_metadata_only'):
+                continue
+            for update in query.get('metadata_updates', ()):
+                if (not isinstance(update, dict)
+                        or update.get('kind') != 'source_module_initialization_member_metadata'):
+                    continue
+                signature = update.get('signature_creation')
+                if signature is None:
+                    continue
+                updater = update.get('updater')
+                if (not isinstance(signature, dict) or not isinstance(updater, dict)
+                        or signature.get('caller') != updater
+                        or query.get('target') != updater):
+                    return False
+                nested_signatures.append(signature)
+                nested_callers.append(updater)
+        if nested_signatures:
+            nested_hook = dict(hook)
+            nested_hook['signature_creations'] = nested_signatures
+            if not _signature_creations(
+                    nested_hook, complete_hashes, related_callers=nested_callers):
+                return False
+        elif not _signature_creations(hook, complete_hashes):
+            return False
+    elif not _signature_creations(hook, complete_hashes):
         return False
 
     records = hook.get("callable_metadata_queries")
@@ -430,10 +459,132 @@ def _dynamic_signature_parameters(hook, proof, hashes):
     dynamic = proof.get('dynamic_parameters')
     if not isinstance(dynamic, (list, tuple)) or not 1 <= len(dynamic) <= 256:
         return False
-    queries = [item for item in hook.get('class_metadata_queries', ())
-               if isinstance(item, dict) and item.get('kind') == 'source_bound_class_metadata_query'
-               and item.get('caller') == proof.get('caller')
-               and item.get('result_shape') == 'native_string_list']
+
+    # Module-initialization queries are nested under their metadata update.
+    # Keep them tied to the exact updater and signature proof that produced them.
+    queries = []
+    for item in hook.get('class_metadata_queries', ()):
+        if not isinstance(item, dict):
+            continue
+        if item.get('kind') == 'source_bound_class_metadata_query':
+            queries.append((item, None))
+            continue
+        if item.get('kind') != 'source_class_creation_metadata_only':
+            continue
+        for update in item.get('metadata_updates', ()):
+            signature = update.get('signature_creation') if isinstance(update, dict) else None
+            if (isinstance(signature, dict) and signature.get('caller') == item.get('target')
+                    and signature.get('caller') == update.get('updater')
+                    and signature.get('dynamic_parameters')):
+                queries.extend((segment.get('input_query'), update.get('module_call_evidence'))
+                               for segment in signature['dynamic_parameters']
+                               if isinstance(segment, dict))
+
+    def query_is_valid(query, module_call_evidence=None):
+        def hashes_match(record, parent=None):
+            recorded = record.get('source_hashes') if isinstance(record, dict) else None
+            if (not isinstance(recorded, dict) or not recorded
+                    or any(not isinstance(path, str) or not isinstance(digest, str)
+                           or hashes.get(path) != digest for path, digest in recorded.items())):
+                return False
+            return (parent is None or isinstance(parent, dict)
+                    and all(parent.get(path) == digest for path, digest in recorded.items()))
+
+        if (not isinstance(query, dict)
+                or query.get('kind') != 'source_bound_class_metadata_query'
+                or query.get('status') != 'source_bound'
+                or query.get('caller') != proof.get('caller')
+                or query.get('result_shape') != 'native_string_list'
+                or query.get('completion') != 'normal_return_only'
+                or query.get('runtime_execution_confirmed') is not False
+                or 'result' in query
+                or not hashes_match(query)
+                or not _strings(query.get('assumptions'))
+                or not set(query['assumptions']).issubset(proof.get('assumptions', ()))
+                or not _identity(query.get('caller'), hashes)
+                or not _identity(query.get('receiver_class'), hashes)
+                or not _witness(query.get('call_evidence'), query['caller'])):
+            return False
+
+        request = query.get('query')
+        entry = query.get('entry_binding')
+        binding = query.get('input_binding')
+        if (not isinstance(request, dict)
+                or request.get('status') != 'requires_native_class_metadata'
+                or request.get('runtime_execution_confirmed') is not False
+                or 'result' in request
+                or request.get('result_shape') != 'native_string_list'
+                or not hashes_match(request, query['source_hashes'])
+                or not isinstance(entry, dict)
+                or entry.get('kind') != 'source_native_class_member_query'
+                or entry.get('status') != 'source_bound'
+                or entry.get('runtime_target_confirmed') is not False
+                or not hashes_match(entry, query['source_hashes'])
+                or not _identity(entry.get('target'), hashes)
+                or not _identity(entry.get('owner_class'), hashes)
+                or entry['owner_class'] != request.get('owner_class')
+                or entry['target']['module'] != entry['owner_class']['module']
+                or entry['target']['file_path'] != entry['owner_class']['file_path']
+                or entry['target']['qualname'].rpartition('.')[0]
+                    != entry['owner_class']['qualname']
+                or not _strings(entry.get('assumptions'))
+                or not set(entry['assumptions']).issubset(query['assumptions'])
+                or not isinstance(binding, dict)
+                or binding.get('kind') != 'fresh_source_class_metadata'
+                or not isinstance(binding.get('matching_members'), (list, tuple))
+                or not binding['matching_members']):
+            return False
+
+        phase = binding.get('phase')
+        dependency = binding.get('creation_dependency')
+        if phase == 'module_call_entry' and dependency == 'source_module_prefix':
+            prefix = binding.get('module_prefix')
+            required = {
+                'kind': 'source_module_fresh_class_prefix',
+                'status': 'source_bound',
+                'phase': 'before_module_call',
+                'call_effects': 'unproved',
+                'deferred_bodies_executed': False,
+                'runtime_initialization_confirmed': False,
+                'completion': 'normal_prefix_only',
+            }
+            if (not isinstance(prefix, dict)
+                    or any(prefix.get(key) != value for key, value in required.items())
+                    or prefix.get('receiver_class') != query['receiver_class']
+                    or not isinstance(module_call_evidence, dict)
+                    or prefix.get('call_evidence') != module_call_evidence
+                    or not _witness(module_call_evidence, query['caller'])
+                    or not hashes_match(prefix, query['source_hashes'])
+                    or not _strings(prefix.get('assumptions'))
+                    or not set(prefix['assumptions']).issubset(query['assumptions'])
+                    or not _identity(prefix.get('receiver_class'), hashes)
+                    or not _witness(prefix.get('class_evidence'), prefix['receiver_class'])
+                    or not _observer({'observation_guard': prefix.get('observation_guard'),
+                                      'assumptions': prefix['assumptions']},
+                                     prefix.get('source_hashes', {}))):
+                return False
+        elif phase == 'class_creation_entry' and dependency == 'source_class_creation_prefix':
+            prefix = binding.get('class_creation_prefix')
+            if (not isinstance(prefix, dict)
+                    or prefix.get('kind') != 'source_class_creation_prefix'
+                    or prefix.get('status') != 'source_bound'
+                    or prefix.get('receiver_class') != query['receiver_class']
+                    or prefix.get('phase') != 'after_class_body_before_class_decorators'
+                    or prefix.get('runtime_execution_confirmed') is not False
+                    or prefix.get('completion') != 'native_type_creation_prefix_only'
+                    or not hashes_match(prefix, query['source_hashes'])
+                    or not _identity(prefix.get('receiver_class'), hashes)
+                    or not _witness(prefix.get('class_evidence'), prefix['receiver_class'])
+                    or not _strings(prefix.get('assumptions'))
+                    or not set(prefix['assumptions']).issubset(query['assumptions'])):
+                return False
+        else:
+            return False
+
+        return True
+
+    queries = [(item, outer_call) for item, outer_call in queries
+               if query_is_valid(item, outer_call)]
     if not queries:
         return False
     for segment in dynamic:
@@ -445,7 +596,7 @@ def _dynamic_signature_parameters(hook, proof, hashes):
                 or input_query.get('status') != 'source_bound'
                 or input_query.get('caller') != proof.get('caller')
                 or input_query.get('result_shape') != 'native_string_list'
-                or input_query not in queries
+                or not any(input_query == candidate for candidate, _ in queries)
                 or segment.get('names') != 'unresolved_native_strings'
                 or segment.get('parameter_kind') != 'KEYWORD_ONLY'
                 or segment.get('completion') != 'normal_return_only'
@@ -453,19 +604,19 @@ def _dynamic_signature_parameters(hook, proof, hashes):
                 or not _witness(segment.get('evidence'), proof['caller'])):
             return False
         filters = segment.get('filters')
-        if not isinstance(filters, (list, tuple)) or not filters:
+        if not isinstance(filters, (list, tuple)):
             return False
         for item in filters:
             table = item.get('table_binding') if isinstance(item, dict) else None
             if (not isinstance(item, dict)
                     or item.get('operation') != 'native_string_not_in_literal_sequence'
                     or not isinstance(item.get('excluded_names'), (list, tuple))
-                    or not item['excluded_names']
                     or any(not isinstance(name, str) for name in item['excluded_names'])
                     or not isinstance(table, dict)
                     or table.get('kind') != 'source_class_literal_string_sequence'
-                    or table.get('attribute') != '_PROPERTIES_EXCLUDED_FROM_SET'
-                    or table.get('phase') != 'class_creation_entry'
+                    or not isinstance(table.get('attribute'), str)
+                    or not table['attribute'].isidentifier()
+                    or table.get('phase') not in ('class_creation_entry', 'module_call_entry')
                     or table.get('required_preservation') != 'complete_current_call'
                     or table.get('values') != item['excluded_names']
                     or not _identity(table.get('source_class'), hashes)
@@ -488,7 +639,7 @@ def _dynamic_signature_parameters(hook, proof, hashes):
 #  @param hook Value named `hook` supplied by the enclosing analysis.
 #  @param complete_source_hashes Hashes for the complete source snapshot.
 #  @return Result of the `_signature_creations` operation.
-def _signature_creations(hook, complete_source_hashes=None):
+def _signature_creations(hook, complete_source_hashes=None, related_callers=()):
     records = hook.get('signature_creations')
     claim = 'standard_library_inspect_signature_creation'
     if records is None:
@@ -496,7 +647,9 @@ def _signature_creations(hook, complete_source_hashes=None):
     if not isinstance(records, (list, tuple)) or not 1 <= len(records) <= 256:
         return False
     hashes = hook['source_hashes'] if complete_source_hashes is None else complete_source_hashes
-    callers = [hook['target']] + [call['target'] for call in hook.get('method_calls', ())]
+    callers = ([hook['target']]
+               + [call['target'] for call in hook.get('method_calls', ())]
+               + list(related_callers))
     required = {'source_snapshot_bindings_hold', claim,
                 'standard_library_inspect_parameter_creation',
                 'standard_builtin_namespace_preserved',

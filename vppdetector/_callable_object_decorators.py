@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 from pathlib import Path
 
@@ -48,308 +49,188 @@ def _source_node(context, identity, node_type):
     return candidates[0] if len(candidates) == 1 else None
 
 
-## Prove Matplotlib's docstring callable-object decorator returns this function
-## 证明Matplotlib文档字符串可调用对象装饰器返回原函数
+## Prove a source callable-object decorator preserves a function object
+## 证明源码可调用对象装饰器保留函数对象身份
 #
 #  @param context Reusable analysis context for the selected source snapshot.
 #  @param analysis PCResolve analysis result being validated or consumed.
 #  @param function Indexed source function under analysis.
 #  @param fact Producer fact being validated or interpreted.
-#  @return Result of the `matplotlib_docstring_function_binding` operation.
-def matplotlib_docstring_function_binding(context, analysis, function, fact):
-    decorators = [node for node in function.node.decorator_list
-                  if isinstance(node, ast.Attribute) and node.attr == 'dedent_interpd'
-                  and isinstance(node.value, ast.Name)
-                  and node.value.id in ('docstring', '_docstring')]
-    if len(decorators) != 1:
+#  @return Validated identity-preserving decorator fact, or None when evidence is incomplete.
+def source_callable_object_decorator_binding(context, analysis, function, fact):
+    decorators = function.node.decorator_list
+    if (len(decorators) != 1 or not isinstance(decorators[0], ast.Attribute)
+            or not isinstance(decorators[0].value, ast.Name)):
         return None
     decorator = decorators[0]
-    alias = decorator.value.id
-    module = 'matplotlib.' + ('docstring' if alias == 'docstring' else '_docstring')
-    raw_target = fact.get("target")
-    target = identity_from_target(raw_target) if raw_target is not None else None
-    if (function.identity.module != "matplotlib.patches"
-            or identity_from_target(fact.get("function")) != function.identity
-            or target is not None and (target.module != module
-                or target.qualname != "_ArtistPropertiesSubstitution.__call__")
-            or fact.get("identity_status") not in ("preserved", "unknown")
-            or fact.get("basis") != "source_snapshot"
-            or fact.get("completion") != "normal_return"
-            or fact.get("runtime_target_confirmed") is not False):
+    alias, decorator_name = decorator.value.id, decorator.attr
+    imports = context.index.imports.get(function.identity.module, {})
+    module = imports.get(alias)
+    if not isinstance(module, str) or not module:
         return None
 
     expression = fact.get('expression')
-    if (not isinstance(expression, dict)
+    if (identity_from_target(fact.get('function')) != function.identity
+            or fact.get('identity_status') not in ('preserved', 'unknown')
+            or fact.get('basis') != 'source_snapshot'
+            or fact.get('completion') != 'normal_return'
+            or fact.get('runtime_target_confirmed') is not False
+            or not isinstance(expression, dict)
             or expression.get('file_path') != str(function.identity.file_path)
             or any(expression.get(key) != getattr(decorator, key) for key in (
                 'lineno', 'col_offset', 'end_lineno', 'end_col_offset'))):
         return None
 
-    hashes = analysis.inputs.get("sha256", {})
-    fact_hashes = fact.get("source_hashes")
-    if (not isinstance(fact_hashes, dict) or not fact_hashes
+    hashes = analysis.inputs.get('sha256', {})
+    fact_hashes = fact.get('source_hashes')
+    if (not isinstance(hashes, dict) or not isinstance(fact_hashes, dict)
+            or not fact_hashes
             or any(hashes.get(path) != digest for path, digest in fact_hashes.items())):
         return None
-    patch_path = function.identity.file_path
-    doc_filename = 'docstring.py' if alias == 'docstring' else '_docstring.py'
-    doc_path = next((Path(path) for path in hashes
-                     if Path(path).as_posix().endswith('/matplotlib/' + doc_filename)), None)
-    if (doc_path is None or str(patch_path) not in hashes
-            or str(doc_path) not in hashes
-            or str(patch_path) not in fact_hashes
-            or target is not None and (target.file_path is None
-                or target.file_path.resolve() != doc_path.resolve())):
+    module_paths = {identity.file_path for identity in context.index.classes
+                    if identity.module == module and identity.file_path is not None}
+    if not module_paths:
         return None
+    helper_path = next((path for path in module_paths if str(path) in hashes), None)
+    if helper_path is None or str(function.identity.file_path) not in hashes:
+        return None
+    raw_target = fact.get('target')
+    target = identity_from_target(raw_target) if raw_target is not None else None
+    if target is not None and (target.file_path is None
+            or target.file_path.resolve() != helper_path.resolve()):
+        return None
+
     try:
         for path, digest in hashes.items():
-            with Path(path).open(encoding="utf-8-sig") as stream:
-                actual = hashlib.sha256(stream.read().encode("utf-8")).hexdigest()
+            actual = hashlib.sha256(
+                Path(path).read_text(encoding='utf-8-sig').encode('utf-8')).hexdigest()
             if actual != digest:
                 return None
-        patch_tree = ast.parse(patch_path.read_text(encoding="utf-8-sig"))
-        doc_tree = ast.parse(doc_path.read_text(encoding="utf-8-sig"))
+        owner_tree = ast.parse(function.identity.file_path.read_text(encoding='utf-8-sig'))
+        helper_tree = ast.parse(helper_path.read_text(encoding='utf-8-sig'))
     except (OSError, UnicodeError, SyntaxError, RecursionError):
         return None
 
-    # The decorator's module object is imported directly and not rebound in the
-    # defining module's top-level namespace.
-    # 装饰器模块对象由直接导入取得，且未在定义模块的顶层命名空间重新绑定。
-    imports = [node for node in patch_tree.body if isinstance(node, ast.ImportFrom)
-               and node.level == 1 and node.module is None
-               and any(item.name == alias and item.asname is None for item in node.names)]
-    if len(imports) != 1 or any(
-            isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr, ast.FunctionDef,
-                              ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom))
-            and node is not imports[0]
-            and alias in _bound_names(node)
-            for node in patch_tree.body):
+    def top_level_binding(name):
+        return [node for node in owner_tree.body if name in _bound_names(node)]
+
+    import_bindings = [node for node in owner_tree.body
+                       if isinstance(node, (ast.Import, ast.ImportFrom))
+                       and alias in _bound_names(node)]
+    if len(import_bindings) != 1 or top_level_binding(alias) != import_bindings:
         return None
 
-    alias_assignments = [node for node in doc_tree.body if isinstance(node, ast.Assign)
-                         and _bound_names(node) == {"dedent_interpd", "interpd"}]
-    if (len(alias_assignments) != 1
-            or not _same(alias_assignments[0],
-                         "dedent_interpd = interpd = _ArtistPropertiesSubstitution()")
-            or any(_bound_names(node) & {"dedent_interpd", "interpd"}
-                   for node in doc_tree.body if node is not alias_assignments[0])):
+    assignments = []
+    for statement in helper_tree.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        targets = [node for target_node in statement.targets
+                   for node in ast.walk(target_node) if isinstance(node, ast.Name)]
+        if any(node.id == decorator_name for node in targets):
+            assignments.append(statement)
+    if len(assignments) != 1:
         return None
-    classes = {node.name: node for node in doc_tree.body if isinstance(node, ast.ClassDef)}
-    decorated = classes.get("_ArtistPropertiesSubstitution")
-    base = classes.get("Substitution")
-    if (decorated is None or base is None or decorated.decorator_list or base.decorator_list
-            or len(decorated.bases) != 1 or not isinstance(decorated.bases[0], ast.Name)
-            or decorated.bases[0].id != "Substitution"):
+    assignment = assignments[0]
+    value = assignment.value
+    if (not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name)
+            or value.args or value.keywords):
         return None
-    decorated_call = [node for node in decorated.body
-                      if isinstance(node, ast.FunctionDef) and node.name == "__call__"]
-    base_call = [node for node in base.body
-                 if isinstance(node, ast.FunctionDef) and node.name == "__call__"]
-    if (len(decorated_call) != 1 or len(base_call) != 1
-            or not _same(decorated_call[0], """def __call__(self, obj):
-    super().__call__(obj)
-    if isinstance(obj, type) and obj.__init__ != object.__init__:
-        self(obj.__init__)
-    return obj""")
-            or not _same(base_call[0], """def __call__(self, func):
-    if func.__doc__:
-        func.__doc__ = inspect.cleandoc(func.__doc__) % self.params
-    return func""")):
+    class_name = value.func.id
+    if any(decorator_name in _bound_names(node) for node in helper_tree.body
+           if node is not assignment):
         return None
 
-    # Ensure stdlib inspect and the relevant builtin names are not rebound by
-    # this module's top-level source.
-    # 确认本模块顶层源码没有重新绑定标准库inspect或相关内建名称。
-    inspect_imports = [node for node in doc_tree.body if isinstance(node, ast.Import)
-                       and any(alias.name == "inspect" and alias.asname is None
-                               for alias in node.names)]
-    if (len(inspect_imports) != 1
-            or any("inspect" in _bound_names(node) for node in doc_tree.body
-                   if node is not inspect_imports[0])
-            or any(name in _bound_names(node) for node in doc_tree.body
-                   for name in ("isinstance", "type", "object"))):
+    classes = [node for node in helper_tree.body
+               if isinstance(node, ast.ClassDef) and node.name == class_name]
+    if len(classes) != 1:
         return None
+    decorator_class = classes[0]
+    if (decorator_class.decorator_list or len(decorator_class.bases) != 1
+            or not isinstance(decorator_class.bases[0], ast.Name)):
+        return None
+    if any(class_name in _bound_names(node) for node in helper_tree.body
+           if node is not assignment and node is not decorator_class):
+        return None
+    base_name = decorator_class.bases[0].id
+    bases = [node for node in helper_tree.body
+             if isinstance(node, ast.ClassDef) and node.name == base_name]
+    if len(bases) != 1:
+        return None
+    base_class = bases[0]
 
-    assumptions = (
-        "source_snapshot_bindings_hold", "standard_builtin_namespace_preserved",
-        "standard_library_inspect_binding", "no_external_monkeypatch_or_import_hook",
-        "module_initialization_completed_before_query",
-    )
-    return {"assumptions": assumptions, "source_hashes": hashes,
-            "decorator_target": fact["target"], "base_method": "Substitution.__call__",
-            "returned_object": "original_function", "mutated_function_attribute": "__doc__"}
+    def call_method(cls):
+        methods = [node for node in cls.body
+                   if isinstance(node, ast.FunctionDef) and node.name == '__call__']
+        return methods[0] if len(methods) == 1 and not methods[0].decorator_list else None
 
-
-## Prove a bounded Matplotlib keyword-only decorator forwards unchanged
-## 证明受限的Matplotlib装饰器在关键字调用路径上保持转发
-#
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param function Indexed source function under analysis.
-#  @param positional_count Number of positional arguments supplied.
-#  @return Result of the `matplotlib_keyword_only_method_binding` operation.
-def matplotlib_keyword_only_method_binding(context, analysis, function, positional_count):
-    if (function.identity.module != "matplotlib.patches"
-            or type(positional_count) is not int or positional_count < 0):
-        return None
-    keyword_only = [node for node in function.node.decorator_list
-                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == 'make_keyword_only'
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == '_api']
-    docstring = [node for node in function.node.decorator_list
-                 if isinstance(node, ast.Attribute) and node.attr == 'dedent_interpd'
-                 and isinstance(node.value, ast.Name) and node.value.id == '_docstring']
-    if len(keyword_only) != 1 or len(function.node.decorator_list) != 1 + len(docstring):
-        return None
-    decorator = keyword_only[0]
-    if (not isinstance(decorator, ast.Call) or len(decorator.args) != 1
-            or not isinstance(decorator.args[0], ast.Constant)
-            or decorator.args[0].value != "3.6"
-            or len(decorator.keywords) != 1 or decorator.keywords[0].arg != "name"
-            or not isinstance(decorator.keywords[0].value, ast.Constant)
-            or not isinstance(decorator.keywords[0].value.value, str)):
-        return None
-    name = decorator.keywords[0].value.value
-    summaries = [item for item in analysis.functions
-                 if item.get("function", {}).get("module") == function.identity.module
-                 and item.get("function", {}).get("qualname") == function.identity.qualname]
-    effects = summaries[0].get("decorator_effects", ()) if len(summaries) == 1 else ()
-    ## Check whether the decorator effect matches the selected source expression
-    ## 检查装饰器效果是否匹配选定的源码表达式
-    #
-    #  @param effect Value named `effect` supplied by the enclosing analysis.
-    #  @param node AST node or source expression being analyzed.
-    #  @return Boolean indicating whether the requested condition holds.
-    def matches_expression(effect, node):
-        expression = effect.get('expression', {}) if isinstance(effect, dict) else {}
-        return (expression.get('file_path') == str(function.identity.file_path)
-                and all(expression.get(key) == getattr(node, key) for key in (
-                    'lineno', 'col_offset', 'end_lineno', 'end_col_offset')))
-
-    keyword_effects = [effect for effect in effects if matches_expression(effect, decorator)]
-    effect = keyword_effects[0] if len(keyword_effects) == 1 else {}
-    expression = effect.get("expression", {})
-    if (len(keyword_effects) != 1 or effect.get("identity_status") != "unknown"
-            or expression.get("file_path") != str(function.identity.file_path)
-            or any(expression.get(key) != getattr(decorator, key) for key in (
-                "lineno", "col_offset", "end_lineno", "end_col_offset"))
-            or not any(boundary.get("reason") == "decorator_factory_unproven"
-                       and identity_from_target(boundary.get("function")) is not None
-                       and identity_from_target(boundary["function"]).module
-                           == "matplotlib._api.deprecation"
-                       and identity_from_target(boundary["function"]).qualname
-                           == "make_keyword_only"
-                       for boundary in effect.get("boundaries", ()))):
-        return None
-    if docstring:
-        doc_effects = [item for item in effects if matches_expression(item, docstring[0])]
-        if (len(doc_effects) != 1
-                or matplotlib_docstring_function_binding(
-                    context, analysis, function, doc_effects[0]) is None):
+    def normalized(method):
+        arguments = method.args.posonlyargs + method.args.args
+        if (len(arguments) != 2 or method.args.kwonlyargs or method.args.vararg
+                or method.args.kwarg or method.args.defaults or method.args.kw_defaults):
             return None
-    factory_identity = type(function.identity)(
-        "matplotlib._api.deprecation", "make_keyword_only")
-    factory = context.index.find(factory_identity)
-    if (factory is None or factory.node.decorator_list
-            or not isinstance(factory.node, ast.FunctionDef)):
+        names = {arguments[0].arg: 'self', arguments[1].arg: 'value'}
+
+        class Rename(ast.NodeTransformer):
+            def visit_Name(self, node):
+                if node.id in names:
+                    node.id = names[node.id]
+                return node
+
+            def visit_arg(self, node):
+                if node.arg in names:
+                    node.arg = names[node.arg]
+                return node
+
+        normalized_method = Rename().visit(ast.fix_missing_locations(ast.Module(
+            body=[copy.deepcopy(method)], type_ignores=[])))
+        return normalized_method.body[0]
+
+    child_call, base_call = call_method(decorator_class), call_method(base_class)
+    if child_call is None or base_call is None:
         return None
-    body = [node for node in factory.node.body if not (
-        isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, str))]
-    wrappers = [node for node in body if isinstance(node, ast.FunctionDef)
-                and node.name == "wrapper"]
-    if (len(wrappers) != 1 or [arg.arg for arg in factory.node.args.args]
-            != ["since", "name", "func"] or factory.node.args.posonlyargs
-            or factory.node.args.kwonlyargs or factory.node.args.vararg
-            or factory.node.args.kwarg or len(factory.node.args.defaults) != 1
-            or not isinstance(factory.node.args.defaults[0], ast.Constant)
-            or factory.node.args.defaults[0].value is not None or len(body) != 13
-            or not _same(body[0], "decorator = functools.partial(make_keyword_only, since, name)")
-            or not _same(body[1], "if func is None:\n    return decorator")
-            or not _same(body[2], "signature = inspect.signature(func)")
-            or not isinstance(body[5], ast.Assert)
-            or not _same(body[6], "names = [*signature.parameters]")
-            or not _same(body[7], "name_idx = names.index(name)")
-            or not isinstance(body[-1], ast.Return)
-            or not isinstance(body[-1].value, ast.Name) or body[-1].value.id != "wrapper"):
+    inspect_aliases = [name for name, imported in context.index.imports.get(module, {}).items()
+                       if imported == 'inspect']
+    if len(inspect_aliases) != 1:
         return None
-    wrapper = wrappers[0]
-    if (len(wrapper.decorator_list) != 1
-            or ast.unparse(wrapper.decorator_list[0]) != "functools.wraps(func)"
-            or not isinstance(wrapper.args.vararg, ast.arg)
-            or wrapper.args.vararg.arg != "args"
-            or not isinstance(wrapper.args.kwarg, ast.arg)
-            or wrapper.args.kwarg.arg != "kwargs"
-            or wrapper.args.args or wrapper.args.posonlyargs or wrapper.args.kwonlyargs):
+    inspect_alias = inspect_aliases[0]
+    expected_base = ast.parse(f'''def __call__(self, value):
+    if value.__doc__:
+        value.__doc__ = {inspect_alias}.cleandoc(value.__doc__) % self.params
+    return value
+''').body[0]
+    expected_child = ast.parse('''def __call__(self, value):
+    super().__call__(value)
+    if isinstance(value, type) and value.__init__ != object.__init__:
+        self(value.__init__)
+    return value
+''').body[0]
+    if (ast.dump(normalized(base_call), include_attributes=False)
+            != ast.dump(expected_base, include_attributes=False)
+            or ast.dump(normalized(child_call), include_attributes=False)
+            != ast.dump(expected_child, include_attributes=False)):
         return None
-    statements = [node for node in wrapper.body if not (
-        isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, str))]
-    if (len(statements) != 2 or not isinstance(statements[0], ast.If)
-            or statements[0].orelse or len(statements[0].body) != 1
-            or not isinstance(statements[0].body[0], ast.Expr)
-            or not isinstance(statements[0].body[0].value, ast.Call)
-            or ast.unparse(statements[0].body[0].value.func) != "warn_deprecated"
-            or not isinstance(statements[1], ast.Return)
-            or not isinstance(statements[1].value, ast.Call)):
+    inspect_imports = [node for node in helper_tree.body if isinstance(node, ast.Import)
+                       and any(item.name == 'inspect'
+                               and (item.asname or item.name) == inspect_alias
+                               for item in node.names)]
+    if (any(name in _bound_names(node) for node in helper_tree.body
+            for name in ('super', 'isinstance', 'type', 'object'))
+            or len(inspect_imports) != 1
+            or any(inspect_alias in _bound_names(node) for node in helper_tree.body
+                   if node not in inspect_imports)):
         return None
-    guard = statements[0].test
-    if (not isinstance(guard, ast.Compare) or len(guard.ops) != 1
-            or not isinstance(guard.ops[0], ast.Gt)
-            or not isinstance(guard.left, ast.Call)
-            or ast.unparse(guard.left.func) != "len"
-            or len(guard.left.args) != 1
-            or not isinstance(guard.left.args[0], ast.Name)
-            or guard.left.args[0].id != "args"
-            or len(guard.comparators) != 1
-            or not isinstance(guard.comparators[0], ast.Name)
-            or guard.comparators[0].id != "name_idx"):
-        return None
-    forwarded = statements[1].value
-    if (not isinstance(forwarded.func, ast.Name) or forwarded.func.id != "func"
-            or len(forwarded.args) != 1 or not isinstance(forwarded.args[0], ast.Starred)
-            or not isinstance(forwarded.args[0].value, ast.Name)
-            or forwarded.args[0].value.id != "args"
-            or len(forwarded.keywords) != 1 or forwarded.keywords[0].arg is not None
-            or not isinstance(forwarded.keywords[0].value, ast.Name)
-            or forwarded.keywords[0].value.id != "kwargs"):
-        return None
-    parameters = function.node.args.posonlyargs + function.node.args.args
-    names = [parameter.arg for parameter in parameters]
-    if names.count(name) != 1:
-        return None
-    warning_guard_false = positional_count <= names.index(name)
-    hashes = analysis.inputs.get("sha256", {})
-    if (not isinstance(hashes, dict)
-            or str(function.identity.file_path) not in hashes
-            or str(factory.identity.file_path) not in hashes
-            or any(not isinstance(path, str) or not isinstance(digest, str)
-                   or len(digest) != 64 for path, digest in hashes.items())):
-        return None
-    try:
-        factory_tree = ast.parse(factory.identity.file_path.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeError, SyntaxError, RecursionError):
-        return None
-    imports = [node for node in factory_tree.body if isinstance(node, ast.Import)
-               and any(alias.name == "functools" and alias.asname is None for alias in node.names)]
-    if (len(imports) != 1
-            or str(factory.identity.file_path) not in hashes
-            or hashes[str(factory.identity.file_path)] != analysis.inputs["sha256"].get(
-                str(factory.identity.file_path))):
-        return None
-    assumptions = [
-        "source_snapshot_bindings_hold", "standard_library_partial_protocol",
-        "standard_library_functools_wraps_protocol", "no_external_monkeypatch_or_import_hook",
-        "source_wrapper_forwarding_on_normal_return",
-    ]
-    if warning_guard_false:
-        assumptions.append('keyword_only_warning_guard_false')
-    else:
-        assumptions.append('default_warning_filters_allow_deprecation_warnings')
-    return {"assumptions": tuple(assumptions),
-        "source_hashes": hashes, "factory": factory.identity,
-        "wrapper_evidence": wrapper, "warning_guard_false": warning_guard_false,
-        "warning_branch_taken": not warning_guard_false}
+
+    return {
+        'assumptions': ('source_snapshot_bindings_hold',
+                        'standard_builtin_namespace_preserved',
+                        'standard_library_inspect_binding',
+                        'no_external_monkeypatch_or_import_hook',
+                        'module_initialization_completed_before_query'),
+        'source_hashes': fact_hashes,
+        'decorator_target': fact.get('target'),
+        'returned_object': 'original_function',
+        'mutated_function_attribute': '__doc__',
+    }
 
 
 ## Collect names bound by a source expression

@@ -278,6 +278,8 @@ class CallContext:
     callsite optionally identifies the exact original source call. Matching
     PCResolve caller facts may recover bounded literals under explicit source
     assumptions; missing/mismatched source keeps syntax-only assessment.
+    execution_directory supplies the process working directory for relative
+    caller-side file paths
     """
 
     expression: Union[str, ast.Call]
@@ -292,12 +294,21 @@ class CallContext:
     observed_attribute_retentions: Tuple[ObservedAttributeRetention, ...] = ()
     observed_capture_rejections: Tuple[ObservedCaptureRejection, ...] = ()
     observed_fixed_bindings: Tuple[ObservedFixedBinding, ...] = ()
+    execution_directory: Optional[Path] = None
 
     ## Validate and normalize the immutable call-context fields
     ## 校验并规范化不可变调用上下文字段
     #
     #  @return Result of type `None`.
     def __post_init__(self):
+        if self.execution_directory is not None:
+            try:
+                directory = Path(self.execution_directory)
+            except (TypeError, ValueError):
+                raise ValueError('execution_directory must be an absolute path or None')
+            if not directory.is_absolute():
+                raise ValueError('execution_directory must be an absolute path or None')
+            object.__setattr__(self, 'execution_directory', directory)
         if self.bound_receiver is not None and type(self.bound_receiver) is not bool:
             raise ValueError("bound_receiver must be bool or None")
         names = [name for name, _ in self.known_values]

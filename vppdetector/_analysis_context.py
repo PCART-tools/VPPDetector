@@ -37,6 +37,7 @@ class AnalysisContext:
     _return_transform_spans: dict = field(default_factory=dict, init=False, repr=False)
     _constant_tests: dict = field(default_factory=dict, init=False, repr=False)
     _dispatch_context_cache: dict = field(default_factory=dict, init=False, repr=False)
+    _contextvar_package_cache: dict = field(default_factory=dict, init=False, repr=False)
     _source_queries: SourceQueries = field(default_factory=SourceQueries, init=False, repr=False)
 
     ## Build a reusable analysis context from a source context
@@ -96,7 +97,12 @@ class AnalysisContext:
                 source_class = self.index.resolve_class(replace(
                     identity, qualname=owner))
         if source_class is not None:
-            analysis = self.adapter.analyze(source_class)
+            try:
+                analysis = self.adapter.analyze(source_class)
+            except ResolutionError as exc:
+                if exc.code != 'flow_analysis_failed':
+                    raise
+                raise ResolutionError(str(exc), 'constructor_analysis_failed') from exc
             fact = source_constructor_entry_binding(analysis, source_class)
             entry = self.index.find(identity_from_target(analysis.entry))
             parameters = (entry.node.args.posonlyargs + entry.node.args.args) if entry else ()

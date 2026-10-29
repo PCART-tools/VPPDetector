@@ -85,7 +85,8 @@ def scan_api(
     except ResolutionError as exc:
         report = _missing_api_report(
             index, target_api,
-            exc.code if exc.code in {'pcresolve_fact_contract_unavailable', 'flow_analysis_failed'}
+            exc.code if exc.code in {'pcresolve_fact_contract_unavailable', 'flow_analysis_failed',
+                                     'constructor_analysis_failed'}
             else 'entry_resolution_failed', str(exc))
         nominal = index.find(target_api)
         if nominal is not None and exc.code in {

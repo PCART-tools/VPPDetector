@@ -39,10 +39,10 @@ from ._analysis_context import (
 from ._attribute_retention import attribute_retention as observed_attribute_retention
 from ._cached_imports import cached_import_binding, decorator_import_binding
 from ._callable_object_decorators import (
-    matplotlib_docstring_function_binding,
-    matplotlib_keyword_only_method_binding,
+    source_callable_object_decorator_binding,
 )
 from ._caller_arguments import caller_arguments
+from ._contextvar_proxy import caller_contextvar_conditions
 from ._capture_rejection import capture_rejection as observed_capture_rejection
 from ._container_predicates import container_predicate as observed_container_predicate
 from ._context_manager_propagation import rethrows_with_body
@@ -171,11 +171,30 @@ class _SourceInstance:
     attributes: dict
 
 
+## Represent a directly imported source class with a verified constructor
+## 表示具有已验证构造器的直接导入源码类
+@dataclass(frozen=True)
+class _SourceClass:
+    identity: FunctionIdentity
+    constructor: IndexedFunction
+
+
 ## Represent a local function available to source interpretation.
 ## 表示源码解释器可处理的局部函数。
 @dataclass(frozen=True)
 class _LocalFunction:
     node: ast.AST
+
+
+## Represent a bounded text file supplied by an exact caller context manager
+## 表示由精确调用方上下文管理器提供的有界文本文件
+@dataclass
+class _CallerFile:
+    text: str
+    path: str
+    sha256: str
+    context_evidence: Optional[dict] = None
+    read_count: int = 0
 
 
 ## Represent a source method bound to a modeled receiver.
@@ -201,6 +220,11 @@ def _source_state(value):
     if not isinstance(value, dict):
         raise ValueError("Unproven receiver state")
     kind = value.get("kind")
+    if (kind == 'caller_file_text' and isinstance(value.get('text'), str)
+            and isinstance(value.get('path'), str)
+            and isinstance(value.get('sha256'), str)):
+        return _CallerFile(value['text'], value['path'], value['sha256'],
+                            value.get('context_evidence'))
     if kind == "literal" and type(value.get("value")) in (str, bytes, int, float, bool, type(None)):
         return _Value(value["value"], source_state=True)
     if (kind == 'iterable' and value.get('basis') == 'bounded_stub_return_protocol'
@@ -612,21 +636,6 @@ class _Proof:
                       'This actual call follows the proved same-args-and-kwargs wrapper path; '
                       + '; '.join(forwarding['assumptions']), function.node.decorator_list[0])
             return True
-        keyword_only = matplotlib_keyword_only_method_binding(
-            self.context, analysis, function, positional_count
-        )
-        if keyword_only is not None:
-            self.note(
-                function,
-                'source_call_conditioned_keyword_only_wrapper',
-                'The source-bound Matplotlib keyword-only wrapper forwards the same args '
-                'and kwargs on its normal-return path; warning guard false: '
-                + str(keyword_only['warning_guard_false']) + '. '
-                + '; '.join(keyword_only['assumptions']),
-                function.node.decorator_list[0],
-            )
-            return True
-
         summaries = [
             item
             for item in analysis.functions
@@ -643,7 +652,7 @@ class _Proof:
         if fact.get('body_binding_status') != 'preserved':
             fact = fresh_decoration_binding(self.context, analysis, function, summaries[0])
             if fact is None:
-                source_binding = matplotlib_docstring_function_binding(
+                source_binding = source_callable_object_decorator_binding(
                     self.context, analysis, function, effects[0]
                 )
                 if source_binding is None:
@@ -651,9 +660,8 @@ class _Proof:
                 self.note(
                     function,
                     'source_callable_object_decorator_preserves_function',
-                    'The source-bound Matplotlib docstring decorator returns the original '
-                    'function on this function-decoration path; its only target mutation is '
-                    'the function __doc__ attribute. '
+                    'The source-bound callable-object decorator returns the original '
+                    'function and only changes its __doc__ metadata. '
                     + '; '.join(source_binding['assumptions']),
                     function.node.decorator_list[0],
                 )
@@ -1879,6 +1887,10 @@ class _Frame:
             return _finite(node)
         if isinstance(node, ast.Name):
             value = self.values.get(node.id, _Value())
+            if isinstance(value, _Value) and not self.related(node):
+                source_class = self.imported_source_class(node.id)
+                if source_class is not None:
+                    return source_class
             if isinstance(value, _LocalFunction):
                 self.unknown("deferred_callable_not_followed", node)
             if node.id in self.facts and isinstance(value, _Value):
@@ -2069,6 +2081,49 @@ class _Frame:
             self.unknown("unsupported_value_use", node)
         return _Value()
 
+    ## Resolve a simple imported source class and its constructor
+    ## 解析简单导入源码类及其构造器
+    #
+    #  @param name Imported class binding in the analyzed module.
+    #  @return Result of the `imported_source_class` operation.
+    def imported_source_class(self, name):
+        aliases = self.proof.context.index.imports.get(self.function.identity.module, {})
+        imported = aliases.get(name)
+        if not isinstance(imported, str) or "." not in imported:
+            return None
+        module, qualname = imported.rsplit(".", 1)
+        identity = self.proof.context.index.resolve_class(
+            FunctionIdentity(module, qualname)
+        )
+        if identity is None:
+            return None
+        constructor = self.proof.context.index.resolve_imported(identity)
+        if (constructor is None or constructor.node.decorator_list
+                or constructor.identity.qualname.rsplit(".", 1)[-1] != "__init__"):
+            return None
+        structure = self.proof.context._source_queries.structure(
+            identity.file_path, "utf-8-sig"
+        )
+        if structure is None:
+            return None
+        classes = [item for item in structure.walk()
+                   if isinstance(item, ast.ClassDef) and item.name == identity.qualname.rsplit(".", 1)[-1]
+                   and item.lineno == identity.lineno]
+        if len(classes) != 1:
+            return None
+        class_node = classes[0]
+        from pcresolve.scope_facts import statement_scope_facts
+
+        module_bindings = statement_scope_facts(structure.tree.body).bound
+        if (class_node.decorator_list or class_node.keywords
+                or any(not isinstance(base, ast.Name) or base.id != "object"
+                       for base in class_node.bases)
+                or class_node.bases and "object" in module_bindings
+                or any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                       and item.name == "__new__" for item in class_node.body)):
+            return None
+        return _SourceClass(identity, constructor)
+
     ## Expand finite positional values while retaining their source slots
     ## 展开有限位置实参并保留其来源槽位
     #
@@ -2171,6 +2226,20 @@ class _Frame:
             # argument calls, is executed or attributed to the library source.
             # 客户端表达式视为不透明语法：不执行其中任何用户代码（包括嵌套实参调用），也不把它归到库源码中。
             return _Value()
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == 'read'
+                and not node.args and not node.keywords):
+            receiver = self.expression(node.func.value)
+            if isinstance(receiver, _CallerFile):
+                if receiver.read_count:
+                    return _Value('', source_state=True)
+                receiver.read_count += 1
+                self.proof.note(
+                    self.function, 'source_caller_file_read',
+                    'The exact caller binds this parameter to a bounded text file opened '
+                    'from its execution directory; the file content hash is '
+                    + receiver.sha256 + '.', node,
+                )
+                return _Value(receiver.text, source_state=True)
         facts = next(
             (
                 call
@@ -2180,6 +2249,20 @@ class _Frame:
             ),
             None,
         )
+        if isinstance(node.func, ast.Name):
+            callee = self.values.get(node.func.id)
+            if isinstance(callee, _SourceClass):
+                positional, keywords = self.arguments(node)
+                target = callee.constructor
+                self.proof.bind(
+                    target, positional, keywords, True, node, caller=self.function
+                )
+                self.proof.note(
+                    self.function, 'source_imported_class_constructor_binding',
+                    'The imported source class resolves to one plain class constructor; '
+                    'its exact signature is used for argument binding.', node, target.identity,
+                )
+                return _Value()
         inferred_source_target = False
         inferred_context = self.proof.context
         if (facts is not None and facts.target is None
@@ -2214,26 +2297,21 @@ class _Frame:
                         'PCResolve binds this receiver to a source helper; every returned '
                         'attribute is statically typed through its owner contract and resolves '
                         'to the same source method implementation.', node, inferred)
-        numpy_iterable = (facts is not None and facts.target is not None
-            and facts.target.module == 'numpy' and facts.target.qualname == 'iterable')
-        if (facts is not None and facts.target is None
-                and facts.target_status == 'receiver_unresolved'):
-            imported_modules = self.proof.context.index.imports.get(
-                self.function.identity.module, {})
-            numpy_iterable = any(
-                imported == 'numpy' and facts.callee_name == alias + '.iterable'
-                for alias, imported in imported_modules.items())
-        if (numpy_iterable
+        iterability_predicate = None
+        if facts is not None and facts.target is None:
+            iterability_predicate = self.proof.context.adapter.source_call_protocol(
+                self.function, node)
+        if (iterability_predicate is not None
                 and len(node.args) == 1 and not node.keywords
                 and not isinstance(node.args[0], ast.Starred)):
             value = self.expression(node.args[0])
             if isinstance(value, _Value) and value.iterable is not None:
                 self.proof.note(
-                    self.function, 'source_stub_iterability_predicate',
-                    'PCResolve binds the call to numpy.iterable, and its exact caller '
-                    'argument has a bounded installed-stub return protocol proving '
-                    'iterability without executing the caller expression.', node,
-                    facts.target,
+                    self.function, 'source_iterability_predicate',
+                    'PCResolve proves this exact call uses a source-defined iterability '
+                    'predicate, and the caller argument has a bounded return protocol '
+                    'proving its iteration behavior without executing the expression.', node,
+                    facts.target if facts is not None else None,
                 )
                 return _Value(value.iterable, _tracked(value), _key_presence(value), consumed=True)
         if isinstance(node.func, ast.Name):
@@ -2584,31 +2662,6 @@ class _Frame:
             target = self.proof.context.index.find(confirmed)
             if target is None or target.is_overload or target.node.decorator_list:
                 self.unknown('conflicting_target_fact', node)
-            if (self.function.identity.module == "json"
-                    and self.function.identity.qualname == "loads"
-                    and target.identity.module == "json.decoder"
-                    and target.identity.qualname == "JSONDecoder.__init__"
-                    and isinstance(node.func, ast.Name) and node.func.id == "cls"
-                    and not node.args and len(node.keywords) == 1
-                    and node.keywords[0].arg is None
-                    and isinstance(node.keywords[0].value, ast.Name)
-                    and node.keywords[0].value.id == "kw"
-                    and target.signature.kwarg is None
-                    and "app" not in (*target.signature.positional_only,
-                                      *target.signature.positional_or_keyword,
-                                      *target.signature.keyword_only)):
-                positional, keywords = self.arguments(node)
-                self.proof.bind(target, positional, keywords, True, node,
-                                caller=self.function)
-                self.proof.note(
-                    self.function,
-                    "standard_json_decoder_constructor_binding",
-                    "The default JSONDecoder class call binds its exact captured keyword "
-                    "mapping to the indexed __init__ signature.",
-                    node,
-                    target.identity,
-                )
-                return _Value()
             self.proof.note(self.function, 'confirmed_call_target',
                             'Caller supplied this unresolved call target for signature rejection '
                             'only; body binding and effects remain unproved.',
@@ -2726,23 +2779,11 @@ class _Frame:
                 positional_count = len(positional) + int(bool(target.is_bound_method))
                 factory_forwarding = wrapper_forwarding_binding(
                     self.proof.context, wrapped, target, positional_count)
-                keyword_only_forwarding = matplotlib_keyword_only_method_binding(
-                    self.proof.context, wrapped, target, positional_count)
                 if factory_forwarding is not None:
                     self.proof.note(
                         self.function, 'source_wrapper_argument_forwarding',
                         '; '.join(factory_forwarding.get('assumptions', ())), node,
                         target.identity,
-                    )
-                    effect_boundaries.discard('identity_decorator_effects_unmodeled')
-                elif keyword_only_forwarding is not None:
-                    self.proof.note(
-                        self.function, 'source_call_conditioned_keyword_only_wrapper',
-                        'The source-bound Matplotlib keyword-only wrapper forwards the same '
-                        'args and kwargs on its normal-return path; warning guard false: '
-                        f"{keyword_only_forwarding['warning_guard_false']}. "
-                        + '; '.join(keyword_only_forwarding['assumptions']),
-                        node, target.identity,
                     )
                     effect_boundaries.discard('identity_decorator_effects_unmodeled')
         if effect_boundaries:
@@ -3091,361 +3132,6 @@ def _parse_call(call):
     return node if isinstance(node, ast.Call) else None
 
 
-## Prove Flask's standard JSON branch for the isolated PCBench call shape
-## 证明受限PCBench调用形态下Flask标准JSON分支的行为
-#
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param call Original client call or its call-specific evidence.
-#  @param node AST node or source expression being analyzed.
-#  @return Result of the `_flask_json_load_without_app_context` operation.
-def _flask_json_load_without_app_context(context, entry, call, node):
-    if (entry.identity.module != "flask.json" or entry.identity.qualname != "load"
-            or entry.identity.file_path is None
-            or not isinstance(call.callsite, SourceSpan)
-            or Path(call.callsite.file_path).name != "main.py"):
-        return None
-
-    site = call.callsite
-    caller_path = Path(site.file_path)
-    try:
-        with tokenize.open(caller_path) as stream:
-            caller_tree = ast.parse(stream.read(), filename=str(caller_path))
-        with tokenize.open(entry.identity.file_path) as stream:
-            flask_tree = ast.parse(stream.read(), filename=str(entry.identity.file_path))
-    except (OSError, UnicodeError, SyntaxError, TypeError):
-        return None
-
-    fields = ("lineno", "col_offset", "end_lineno", "end_col_offset")
-    span = tuple(getattr(site, field) for field in fields)
-    calls = [item for item in ast.walk(caller_tree) if isinstance(item, ast.Call)
-             and tuple(getattr(item, field) for field in fields) == span]
-    if (len(calls) != 1
-            or ast.dump(calls[0], include_attributes=False)
-            != ast.dump(node, include_attributes=False)):
-        return None
-    source_call = calls[0]
-    if (ast.unparse(source_call.func) != "flask.json.load"
-            or len([item for item in source_call.keywords if item.arg == "app"]) != 1
-            or not any(item.arg == "app" and isinstance(item.value, ast.Constant)
-                       and item.value.value is None for item in source_call.keywords)
-            or any(item.arg is None for item in source_call.keywords)):
-        return None
-
-    # Only permit the exact straight-line PCBench script structure. In
-    # particular, no branch, function, import hook, or context-pushing call may
-    # run before this module-level call.
-    # 仅接受精确的直线型PCBench脚本结构；在此模块级调用之前不得执行分支、函数、导入钩子或上下文压入调用。
-    accepted_with = []
-    file_path_values = []
-    for statement in caller_tree.body:
-        if isinstance(statement, ast.Import):
-            if (len(statement.names) != 1 or statement.names[0].name != "flask"
-                    or statement.names[0].asname is not None):
-                return None
-        elif isinstance(statement, ast.Assign):
-            if (len(statement.targets) != 1
-                    or not isinstance(statement.targets[0], ast.Name)
-                    or statement.targets[0].id != "file_path"
-                    or not isinstance(statement.value, ast.Constant)
-                    or not isinstance(statement.value.value, str)):
-                return None
-            file_path_values.append(statement.value.value)
-        elif isinstance(statement, ast.With):
-            if (len(statement.items) != 1 or len(statement.body) != 1
-                    or not isinstance(statement.items[0].context_expr, ast.Call)
-                    or not isinstance(statement.items[0].context_expr.func, ast.Name)
-                    or statement.items[0].context_expr.func.id != "open"
-                    or not isinstance(statement.items[0].optional_vars, ast.Name)
-                    or not isinstance(statement.body[0], ast.Expr)
-                    or statement.body[0].value is not source_call):
-                return None
-            accepted_with.append(statement)
-        else:
-            return None
-    if len(accepted_with) != 1:
-        return None
-    if len(file_path_values) != 1:
-        return None
-    open_call = accepted_with[0].items[0].context_expr
-    if (len(open_call.args) < 2 or not isinstance(open_call.args[0], ast.Name)
-            or open_call.args[0].id != "file_path"
-            or not isinstance(open_call.args[1], ast.Constant)
-            or open_call.args[1].value != "r"
-            or not any(item.arg == "encoding" and isinstance(item.value, ast.Constant)
-                       and item.value.value == "utf-8" for item in open_call.keywords)):
-        return None
-    data_path = (caller_path.parent / file_path_values[0]).resolve()
-    try:
-        data_bytes = data_path.read_bytes()
-        data_text = data_bytes.decode("utf-8")
-        if data_text.startswith("\ufeff"):
-            return None
-        json.loads(data_text)
-    except (OSError, UnicodeError, ValueError, RecursionError):
-        return None
-
-    function = next((item for item in flask_tree.body
-                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and item.name == "load" and item.lineno == entry.identity.lineno), None)
-    if function is None:
-        return None
-    imports_current_app = any(
-        isinstance(item, ast.ImportFrom)
-        and item.module == "globals"
-        and item.level == 2
-        and any(alias.name == "current_app" and alias.asname is None
-                for alias in item.names)
-        for item in flask_tree.body
-    )
-    imports_json = any(
-        isinstance(item, ast.Import)
-        and any(alias.name == "json" and alias.asname == "_json" for alias in item.names)
-        for item in flask_tree.body
-    )
-    if not imports_current_app or not imports_json:
-        return None
-    branches = [item for item in function.body if isinstance(item, ast.If)]
-    if len(branches) != 1:
-        return None
-    branch = branches[0]
-    if not isinstance(branch.test, ast.Name) or branch.test.id != "current_app":
-        return None
-    flask_condition_test = branch.test
-    if (len(branch.body) != 1 or not isinstance(branch.body[0], ast.Return)
-            or not isinstance(branch.body[0].value, ast.Call)
-            or ast.unparse(branch.body[0].value.func) != "current_app.json.load"
-            or not any(item.arg is None and isinstance(item.value, ast.Name)
-                       and item.value.id == "kwargs"
-                       for item in branch.body[0].value.keywords)):
-        return None
-    fallback = [item for item in function.body if isinstance(item, ast.Return)
-                and isinstance(item.value, ast.Call)
-                and ast.unparse(item.value.func) == "_json.load"]
-    if (len(fallback) != 1 or not any(
-            item.arg is None and isinstance(item.value, ast.Name) and item.value.id == "kwargs"
-            for item in fallback[0].value.keywords)):
-        return None
-
-    flask_root = entry.identity.file_path.resolve().parents[1]
-    globals_path = flask_root / "globals.py"
-    werkzeug_path = flask_root.parent / "werkzeug" / "local.py"
-    try:
-        with tokenize.open(globals_path) as stream:
-            globals_tree = ast.parse(stream.read(), filename=str(globals_path))
-        with tokenize.open(werkzeug_path) as stream:
-            werkzeug_tree = ast.parse(stream.read(), filename=str(werkzeug_path))
-    except (OSError, UnicodeError, SyntaxError):
-        return None
-
-    imports_contextvar = any(
-        isinstance(item, ast.ImportFrom) and item.module == "contextvars"
-        and any(alias.name == "ContextVar" and alias.asname is None for alias in item.names)
-        for item in globals_tree.body
-    )
-    imports_localproxy = any(
-        isinstance(item, ast.ImportFrom) and item.module == "werkzeug.local"
-        and any(alias.name == "LocalProxy" and alias.asname is None for alias in item.names)
-        for item in globals_tree.body
-    )
-    assignments = [item for item in globals_tree.body
-                   if isinstance(item, (ast.Assign, ast.AnnAssign))]
-    app_context_vars = [item for item in assignments
-                        if any(isinstance(target, ast.Name) and target.id == "_cv_app"
-                               for target in (item.targets if isinstance(item, ast.Assign)
-                                              else [item.target]))]
-    current_apps = [item for item in assignments
-                    if any(isinstance(target, ast.Name) and target.id == "current_app"
-                           for target in (item.targets if isinstance(item, ast.Assign)
-                                          else [item.target]))]
-    cv_value = app_context_vars[0].value if len(app_context_vars) == 1 else None
-    proxy_value = current_apps[0].value if len(current_apps) == 1 else None
-    if (not imports_contextvar or not imports_localproxy
-            or not isinstance(cv_value, ast.Call) or ast.unparse(cv_value.func) != "ContextVar"
-            or any(item.arg == "default" for item in cv_value.keywords)
-            or not isinstance(proxy_value, ast.Call)
-            or ast.unparse(proxy_value.func) != "LocalProxy"
-            or not proxy_value.args or ast.unparse(proxy_value.args[0]) != "_cv_app"):
-        return None
-
-    proxy_classes = [item for item in werkzeug_tree.body
-                     if isinstance(item, ast.ClassDef) and item.name == "LocalProxy"]
-    if len(proxy_classes) != 1:
-        return None
-    bool_fallbacks = [item.value for item in proxy_classes[0].body
-                      if isinstance(item, ast.Assign)
-                      and any(isinstance(target, ast.Name) and target.id == "__bool__"
-                              for target in item.targets)]
-    if len(bool_fallbacks) != 1 or not isinstance(bool_fallbacks[0], ast.Call):
-        return None
-    fallback_kw = next((item.value for item in bool_fallbacks[0].keywords
-                        if item.arg == "fallback"), None)
-    if (ast.unparse(bool_fallbacks[0].func) != "_ProxyLookup"
-            or not bool_fallbacks[0].args
-            or not isinstance(bool_fallbacks[0].args[0], ast.Name)
-            or bool_fallbacks[0].args[0].id != "bool"
-            or not isinstance(fallback_kw, ast.Lambda)
-            or not isinstance(fallback_kw.body, ast.Constant)
-            or fallback_kw.body.value is not False):
-        return None
-
-    init_methods = [item for item in proxy_classes[0].body
-                    if isinstance(item, ast.FunctionDef) and item.name == "__init__"]
-    contextvar_getters = []
-    for method in init_methods:
-        for branch in ast.walk(method):
-            if (not isinstance(branch, ast.If)
-                    or not isinstance(branch.test, ast.Call)
-                    or not isinstance(branch.test.func, ast.Name)
-                    or branch.test.func.id != "isinstance"
-                    or len(branch.test.args) != 2
-                    or not isinstance(branch.test.args[0], ast.Name)
-                    or branch.test.args[0].id != "local"
-                    or not isinstance(branch.test.args[1], ast.Name)
-                    or branch.test.args[1].id != "ContextVar"):
-                continue
-            for getter in ast.walk(ast.Module(body=branch.body, type_ignores=[])):
-                if not isinstance(getter, ast.FunctionDef) or getter.name != "_get_current_object":
-                    continue
-                gets_context = any(
-                    isinstance(item, ast.Call)
-                    and isinstance(item.func, ast.Attribute)
-                    and isinstance(item.func.value, ast.Name)
-                    and item.func.value.id == "local" and item.func.attr == "get"
-                    for item in ast.walk(getter)
-                )
-                translates_unbound = any(
-                    isinstance(item, ast.ExceptHandler)
-                    and isinstance(item.type, ast.Name) and item.type.id == "LookupError"
-                    and any(isinstance(child, ast.Call)
-                            and isinstance(child.func, ast.Name)
-                            and child.func.id == "RuntimeError"
-                            for child in ast.walk(item))
-                    for item in ast.walk(getter)
-                )
-                if gets_context and translates_unbound:
-                    contextvar_getters.append(getter)
-    if len(contextvar_getters) != 1:
-        return None
-
-    condition = SourceSpan(entry.identity.file_path, flask_condition_test.lineno,
-                           flask_condition_test.col_offset, flask_condition_test.end_lineno,
-                           flask_condition_test.end_col_offset)
-    facts = [(condition, False)]
-
-    # The caller opens a real, valid UTF-8 JSON document in text mode. Bind the
-    # corresponding standard-library loads predicates so unrelated content
-    # checks do not obscure the later tracked-keyword binding rejection.
-    # 调用方以文本模式打开有效UTF-8 JSON文件；绑定对应的标准库loads条件，避免无关内容检查掩盖后续跟踪关键字绑定的拒绝结论。
-    loads_entry = context.index.find(FunctionIdentity("json", "loads"))
-    if loads_entry is None or not isinstance(loads_entry.node, (ast.FunctionDef,
-                                                                  ast.AsyncFunctionDef)):
-        return None
-    string_branches = [item for item in ast.walk(loads_entry.node)
-                       if isinstance(item, ast.If)
-                       and isinstance(item.test, ast.Call)
-                       and isinstance(item.test.func, ast.Name)
-                       and item.test.func.id == "isinstance"
-                       and len(item.test.args) == 2
-                       and isinstance(item.test.args[0], ast.Name)
-                       and item.test.args[0].id == "s"
-                       and isinstance(item.test.args[1], ast.Name)
-                       and item.test.args[1].id == "str"]
-    if len(string_branches) != 1:
-        return None
-    text_branch = string_branches[0]
-    facts.append((SourceSpan(loads_entry.identity.file_path, text_branch.test.lineno,
-                             text_branch.test.col_offset, text_branch.test.end_lineno,
-                             text_branch.test.end_col_offset), True))
-    bom_branches = [item for item in ast.walk(text_branch)
-                    if isinstance(item, ast.If)
-                    and isinstance(item.test, ast.Call)
-                    and isinstance(item.test.func, ast.Attribute)
-                    and isinstance(item.test.func.value, ast.Name)
-                    and item.test.func.value.id == "s"
-                    and item.test.func.attr == "startswith"
-                    and len(item.test.args) == 1
-                    and isinstance(item.test.args[0], ast.Constant)
-                    and item.test.args[0].value == "\ufeff"]
-    if len(bom_branches) != 1:
-        return None
-    bom_test = bom_branches[0].test
-    facts.append((SourceSpan(loads_entry.identity.file_path, bom_test.lineno,
-                             bom_test.col_offset, bom_test.end_lineno,
-                             bom_test.end_col_offset), False))
-
-    # PCResolve reports ``cls(**kw)`` as an unavailable local definition
-    # target. Recover only Python's standard JSONDecoder default constructor:
-    # loads has cls=None by default, selects its imported JSONDecoder class,
-    # and forwards the captured keyword mapping into its plain __init__.
-    # PCResolve将cls(**kw)报告为不可用的局部定义目标；这里只恢复Python标准JSONDecoder默认构造路径：
-    # loads默认cls=None，选中导入的JSONDecoder类，并将捕获映射传给普通__init__。
-    json_imports = context.index.imports.get("json", {})
-    if json_imports.get("JSONDecoder") != "json.decoder.JSONDecoder":
-        return None
-    default_class = [item for item in ast.walk(loads_entry.node)
-                     if isinstance(item, ast.If)
-                     and isinstance(item.test, ast.Compare)
-                     and isinstance(item.test.left, ast.Name)
-                     and item.test.left.id == "cls"
-                     and len(item.test.ops) == 1 and isinstance(item.test.ops[0], ast.Is)
-                     and len(item.test.comparators) == 1
-                     and isinstance(item.test.comparators[0], ast.Constant)
-                     and item.test.comparators[0].value is None
-                     and any(isinstance(child, ast.Assign)
-                             and len(child.targets) == 1
-                             and isinstance(child.targets[0], ast.Name)
-                             and child.targets[0].id == "cls"
-                             and isinstance(child.value, ast.Name)
-                             and child.value.id == "JSONDecoder"
-                             for child in item.body)]
-    constructor_calls = [item for item in ast.walk(loads_entry.node)
-                         if isinstance(item, ast.Call)
-                         and isinstance(item.func, ast.Name) and item.func.id == "cls"
-                         and not item.args and len(item.keywords) == 1
-                         and item.keywords[0].arg is None
-                         and isinstance(item.keywords[0].value, ast.Name)
-                         and item.keywords[0].value.id == "kw"]
-    decoder_init = context.index.find(
-        FunctionIdentity("json.decoder", "JSONDecoder.__init__")
-    )
-    if (len(default_class) != 1 or len(constructor_calls) != 1 or decoder_init is None
-            or decoder_init.signature.kwarg is not None
-            or "app" in (*decoder_init.signature.positional_or_keyword,
-                         *decoder_init.signature.keyword_only,
-                         *decoder_init.signature.positional_only)):
-        return None
-    try:
-        with tokenize.open(decoder_init.identity.file_path) as stream:
-            decoder_tree = ast.parse(stream.read(), filename=str(decoder_init.identity.file_path))
-    except (OSError, UnicodeError, SyntaxError):
-        return None
-    decoder_classes = [item for item in decoder_tree.body
-                       if isinstance(item, ast.ClassDef) and item.name == "JSONDecoder"]
-    if (len(decoder_classes) != 1
-            or any(not isinstance(base, ast.Name) or base.id != "object"
-                   for base in decoder_classes[0].bases)
-            or any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                   and item.name == "object" for item in decoder_tree.body)
-            or any(isinstance(item, (ast.Assign, ast.AnnAssign))
-                   and any(isinstance(target, ast.Name) and target.id == "object"
-                           for target in (item.targets if isinstance(item, ast.Assign)
-                                          else [item.target])) for item in decoder_tree.body)
-            or decoder_classes[0].keywords or decoder_classes[0].decorator_list
-            or any(isinstance(item, ast.FunctionDef) and item.name == "__new__"
-                   for item in decoder_classes[0].body)
-            or decoder_init.node.decorator_list):
-        return None
-    constructor_call = constructor_calls[0]
-    target_fact = (
-        SourceSpan(loads_entry.identity.file_path, constructor_call.lineno,
-                   constructor_call.col_offset, constructor_call.end_lineno,
-                   constructor_call.end_col_offset),
-        decoder_init.identity,
-    )
-    return tuple(facts), target_fact
-
-
 ## Find the exact lexical class owning one indexed source method
 ## 查找拥有指定索引源码方法的精确词法类
 #
@@ -3568,56 +3254,23 @@ def assess_change(
     state, reason = ParameterState.UNKNOWN, "target_api_unavailable"
     try:
         if context is None:
-            raise ResolutionError("No Python sources available.")
+            raise ResolutionError("No Python sources available.", "target_api_unavailable")
         entry = context.resolve_api(target_api)
         if entry is None or entry.is_overload:
-            raise ResolutionError("The API does not resolve to one source implementation.")
+            raise ResolutionError("The API does not resolve to one source implementation.",
+                                  "target_api_unavailable")
         if node is not None:
-            flask_conditions = _flask_json_load_without_app_context(
-                context, entry, call, node
-            )
-            if flask_conditions is not None:
-                condition_facts, target_fact = flask_conditions
-                for condition_span, condition_value in condition_facts:
-                    supplied = proof.known_conditions.get(condition_span)
-                    if supplied is not None and supplied is not condition_value:
-                        proof.unknown(
-                            entry, "conflicting_call_facts",
-                            "A supplied condition conflicts with the validated isolated "
-                            "Flask JSON call context.",
-                            condition_span,
-                        )
-                    proof.known_conditions[condition_span] = condition_value
-                    if condition_span.file_path == entry.identity.file_path:
-                        proof.note(
-                            entry,
-                            "isolated_flask_app_context_absent",
-                            "The exact module-level PCBench entry script has no context "
-                            "activation; Flask current_app is a ContextVar-backed LocalProxy "
-                            "whose unbound bool fallback is False. Flask and Werkzeug source "
-                            "contracts were validated.",
-                            condition_span,
-                        )
-                    else:
-                        proof.note(
-                            entry,
-                            "isolated_flask_text_json_input",
-                            "The exact caller opens a valid UTF-8 JSON file in text mode; "
-                            "standard-library input-type and BOM predicates were resolved "
-                            "from that source file and the indexed json.loads implementation.",
-                            condition_span,
-                        )
-                target_span, target_identity = target_fact
-                proof.known_targets[target_span] = target_identity
-                proof.note(
-                    entry,
-                    "standard_json_decoder_constructor_target",
-                    "The indexed json.loads source selects its imported JSONDecoder when "
-                    "cls is None and invokes that class with the exact captured **kw mapping; "
-                    "the plain decoder class has no custom __new__ or metaclass.",
-                    target_span,
-                    target_identity,
-                )
+            proxy_conditions = caller_contextvar_conditions(context, call, node, entry)
+            for condition_span, fact in proxy_conditions.items():
+                supplied = proof.known_conditions.get(condition_span)
+                if supplied is not None and supplied is not False:
+                    proof.unknown(
+                        entry, 'conflicting_call_facts',
+                        'A supplied condition conflicts with the source-backed unbound '
+                        'ContextVar proxy fact.', condition_span)
+                proof.known_conditions[condition_span] = False
+                proof.note(entry, fact['reason'], fact['detail'], condition_span,
+                           fact['target'])
         if node is None:
             proof.unknown(
                 entry, "callsite_not_resolved", "Supply an original call AST or expression."
@@ -3631,6 +3284,9 @@ def assess_change(
         caller = caller_arguments(context.adapter, call, node, target_api, entry)
         if caller is not None:
             source_values, assumptions, source_target = caller
+            caller_files = [(slot, value) for slot, value in source_values.items()
+                            if isinstance(value, dict)
+                            and value.get('kind') == 'caller_file_text']
 
             # When the exact caller expression invokes the same source class
             # whose __init__ is being assessed, analyze the method through the
@@ -3665,6 +3321,10 @@ def assess_change(
                         if class_caller is not None:
                             context, entry, caller = class_context, class_entry, class_caller
                             proof.context = context
+                            caller_files = [(slot, value) for slot, value
+                                            in class_caller[0].items()
+                                            if isinstance(value, dict)
+                                            and value.get('kind') == 'caller_file_text']
                             proof.evidence.append(ParameterEvidence(
                                 entry.identity, 'source_callsite_constructor_receiver',
                                 'The exact original call resolves to this source class, and '
@@ -3712,6 +3372,13 @@ def assess_change(
                     description + ', '.join(selected_slots)
                     + ' from the exact original source call, conditional on: '
                     + '; '.join(assumptions), call.callsite))
+            for slot, value in caller_files:
+                proof.evidence.append(ParameterEvidence(
+                    entry.identity, 'source_caller_file_resource',
+                    'PCResolve ties argument slot ' + str(slot)
+                    + ' to the exact open context manager; the file was read relative to '
+                    + str(call.execution_directory) + ' and content SHA-256 is '
+                    + value['sha256'] + '.', call.callsite))
         elif call.callsite is not None:
             proof.note(entry, 'source_caller_arguments_unconfirmed',
                        'Caller source facts are unavailable or do not match this exact call.')
@@ -3870,8 +3537,8 @@ def assess_change(
     except _Stop as outcome:
         state, reason = outcome.state, outcome.reason
     except ResolutionError as exc:
-        if exc.code in {'pcresolve_fact_contract_unavailable', 'entry_binding_facts_unavailable',
-                        'entry_callable_binding_unconfirmed'}:
+        if exc.code in {'constructor_analysis_failed', 'pcresolve_fact_contract_unavailable', 'entry_binding_facts_unavailable',
+                        'entry_callable_binding_unconfirmed', 'constructor_entry_unconfirmed'}:
             reason = exc.code
         proof.boundaries.append(AnalysisBoundary(reason, str(exc), target_api))
     return ParameterAssessment(

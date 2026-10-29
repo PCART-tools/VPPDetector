@@ -10,6 +10,7 @@ import ast
 import hashlib
 import math
 import tokenize
+from pathlib import Path
 
 from .models import SourceSpan
 
@@ -17,6 +18,7 @@ from .models import SourceSpan
 _FIELDS = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 _ASSUMPTIONS = {'source_snapshot_bindings_hold', 'standard_module_global_lookup',
                 'no_external_module_global_mutation'}
+_MAX_CALLER_FILE_SIZE = 1024 * 1024
 
 
 ## Convert source coordinates into a validated source span
@@ -64,7 +66,201 @@ def _state(value, budget, depth=0):
     if kind in ('list', 'tuple') and isinstance(value.get('items'), list):
         return {'kind': kind, 'items': [_state(item, budget, depth + 1)
                                        for item in value['items']]}
+    if (kind == 'caller_file_text' and isinstance(value.get('text'), str)
+            and isinstance(value.get('path'), str)
+            and isinstance(value.get('sha256'), str)
+            and hashlib.sha256(value['text'].encode('utf-8')).hexdigest() == value['sha256']):
+        return {'kind': kind, 'text': value['text'], 'path': value['path'],
+                'sha256': value['sha256'],
+                'context_evidence': value.get('context_evidence')}
     raise ValueError('Unsupported caller value')
+
+
+## Resolve a bounded string assigned before a module-level context manager
+## 解析模块级上下文管理器之前赋值的有界字符串
+#
+#  @param node String expression whose source value is requested.
+#  @param tree Parsed caller source tree.
+#  @param before_line Line before which the assignment must occur.
+#  @return Static string value or `None` when the binding is unconfirmed.
+def _module_string(node, tree, before_line):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if not isinstance(node, ast.Name):
+        return None
+    value = None
+    for statement in tree.body:
+        if getattr(statement, 'lineno', before_line) >= before_line:
+            break
+        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            if any(isinstance(target, ast.Name) and target.id == node.id for target in targets):
+                value = (statement.value.value if isinstance(statement.value, ast.Constant)
+                         and isinstance(statement.value.value, str) else None)
+        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+            if any(alias.asname == node.id or alias.asname is None
+                   and alias.name.split('.')[0] == node.id for alias in statement.names):
+                value = None
+    return value
+
+
+## Recover file text only from the exact open resource bound to this call
+## 仅从与当前调用精确绑定的open资源中恢复文件文本
+#
+#  @param fact Validated PCResolve caller input record.
+#  @param source_node Exact call node in the caller source.
+#  @param tree Parsed caller source tree.
+#  @param path Absolute caller source path.
+#  @param execution_directory Absolute project execution directory.
+#  @return File text record by argument slot, or an empty mapping.
+def _caller_file_values(fact, source_node, tree, path, execution_directory):
+    if execution_directory is None:
+        return {}
+    contexts = fact.get('context_managers')
+    bindings = fact.get('context_argument_bindings')
+    if not isinstance(contexts, list) or not isinstance(bindings, list):
+        return {}
+    call_record = fact.get('call_evidence')
+    if not _span(call_record, path):
+        return {}
+    fields = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
+    if any(call_record[field] != getattr(source_node, field) for field in fields):
+        return {}
+    arguments = [({'position': index}, value)
+                 for index, value in enumerate(source_node.args)]
+    arguments.extend(({'keyword': keyword.arg}, keyword.value)
+                     for keyword in source_node.keywords)
+    result = {}
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        slot, name = binding.get('argument'), binding.get('name')
+        manager_index = binding.get('manager_index')
+        if (not isinstance(slot, dict) or not isinstance(name, str)
+                or type(manager_index) is not int or not 0 <= manager_index < len(contexts)):
+            continue
+        argument = next((value for candidate, value in arguments if candidate == slot), None)
+        if not isinstance(argument, ast.Name) or argument.id != name:
+            continue
+        context = contexts[manager_index]
+        if (not isinstance(context, dict) or context.get('kind') != 'context_manager'
+                or context.get('runtime_value_observed') is not False):
+            continue
+        manager = context.get('manager')
+        binding_record = context.get('binding')
+        if (not isinstance(manager, dict) or not isinstance(binding_record, dict)
+                or binding_record.get('name') != name):
+            continue
+        binding_span = binding_record.get('evidence')
+        if not _span(binding_span, path):
+            continue
+        manager_span = manager.get('evidence')
+        if not _span(manager_span, path):
+            continue
+        manager_nodes = [item for item in ast.walk(tree) if isinstance(item, ast.Call)
+                         and all(getattr(item, key) == manager_span[key] for key in fields)]
+        if len(manager_nodes) != 1:
+            continue
+        manager_call = manager_nodes[0]
+        if (not isinstance(manager_call.func, ast.Name) or manager_call.func.id != 'open'
+                or manager.get('target') != 'builtins.open'
+                or manager.get('call_syntax') != ast.dump(manager_call, include_attributes=False)
+                or manager.get('source_text') != ast.unparse(manager_call)):
+            continue
+        manager_statement = next((item for item in ast.walk(tree)
+                                  if isinstance(item, (ast.With, ast.AsyncWith))
+                                  and any(candidate.context_expr is manager_call
+                                          and isinstance(candidate.optional_vars, ast.Name)
+                                          and candidate.optional_vars.id == name
+                                          for candidate in item.items)), None)
+        with_span = context.get('with_evidence')
+        if (manager_statement is None
+                or not _span(with_span, path)
+                or any(getattr(manager_statement, key) != with_span.get(key)
+                       for key in fields)):
+            continue
+        item = next(candidate for candidate in manager_statement.items
+                    if candidate.context_expr is manager_call)
+        if any(getattr(item.optional_vars, key) != binding_span.get(key)
+               for key in fields):
+            continue
+        parents = {}
+        for parent in ast.walk(tree):
+            for child in ast.iter_child_nodes(parent):
+                parents[id(child)] = parent
+        current, enclosed = source_node, False
+        while id(current) in parents:
+            current = parents[id(current)]
+            if current is manager_statement:
+                enclosed = True
+                break
+            if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                break
+        if not enclosed:
+            continue
+        shadowed_open = False
+        for statement in tree.body:
+            if statement.lineno >= manager_statement.lineno:
+                break
+            if any(isinstance(child, ast.Name) and child.id == 'open'
+                   and isinstance(child.ctx, ast.Store) for child in ast.walk(statement)):
+                shadowed_open = True
+                break
+            if isinstance(statement, (ast.Import, ast.ImportFrom)) and any(
+                    (alias.asname or alias.name.split('.')[0]) == 'open'
+                    for alias in statement.names):
+                shadowed_open = True
+                break
+            if (isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and statement.name == 'open'):
+                shadowed_open = True
+                break
+        if shadowed_open or not manager_call.args or len(manager_call.args) > 2:
+            continue
+        path_value = _module_string(manager_call.args[0], tree, manager_statement.lineno)
+        mode_node = (manager_call.args[1] if len(manager_call.args) == 2 else
+                     next((item.value for item in manager_call.keywords
+                           if item.arg == 'mode'), None))
+        mode = _module_string(mode_node, tree, manager_statement.lineno) if mode_node else 'r'
+        encoding_node = next((item.value for item in manager_call.keywords
+                              if item.arg == 'encoding'), None)
+        encoding = (_module_string(encoding_node, tree, manager_statement.lineno)
+                    if encoding_node is not None else None)
+        errors_node = next((item.value for item in manager_call.keywords
+                            if item.arg == 'errors'), None)
+        errors = (_module_string(errors_node, tree, manager_statement.lineno)
+                  if errors_node is not None else 'strict')
+        newline_node = next((item.value for item in manager_call.keywords
+                             if item.arg == 'newline'), None)
+        if (path_value is None or mode not in ('r', 'rt') or encoding is None
+                or encoding.lower().replace('_', '-') not in ('utf-8', 'utf8', 'utf-8-sig')
+                or errors != 'strict'
+                or newline_node is not None and not (
+                    isinstance(newline_node, ast.Constant) and newline_node.value is None)
+                or any(item.arg not in ('mode', 'encoding', 'errors', 'newline')
+                       for item in manager_call.keywords)):
+            continue
+        file_path = Path(path_value)
+        if not file_path.is_absolute():
+            file_path = Path(execution_directory) / file_path
+        try:
+            file_path = file_path.resolve(strict=True)
+            if not file_path.is_file() or file_path.stat().st_size > _MAX_CALLER_FILE_SIZE:
+                continue
+            with open(file_path, 'r', encoding=encoding, errors='strict', newline=None) as stream:
+                text = stream.read(_MAX_CALLER_FILE_SIZE + 1)
+            if len(text) > _MAX_CALLER_FILE_SIZE:
+                continue
+            digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        except (OSError, UnicodeError, ValueError):
+            continue
+        result[('position' if 'position' in slot else 'keyword',
+                slot.get('position', slot.get('keyword')))] = {
+            'kind': 'caller_file_text', 'text': text,
+            'path': str(file_path), 'sha256': digest,
+            'context_evidence': context.get('with_evidence'),
+        }
+    return result
 
 
 ## Return typed slot values and the target for this exact source call
@@ -187,6 +383,11 @@ def caller_arguments(adapter, call, node, target, entry):
                                 'call_target': protocol['call_target']}
             elif 'value' in record:
                 return None
+        file_values = _caller_file_values(
+            fact, source_node, source_tree, path, call.execution_directory)
+        for slot, value in file_values.items():
+            if slot not in result:
+                result[slot] = _state(value, budget)
         return result, tuple(fact['assumptions']), fact['target']
     except (AttributeError, OSError, UnicodeError, ValueError, TypeError, KeyError):
         return None

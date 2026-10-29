@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import inspect
 import os
@@ -154,7 +155,7 @@ class PCResolveAdapter:
                 self._flow_hashes[_path(path)] = flow_digest
         self._analysis_cache = {}
         self._expansion_cache = {}
-        self._caller_store = None
+        self._source_protocol_cache = {}
         self._supporting_hashes = {}
 
     ## Reject supporting-source changes after a fact snapshot is registered
@@ -200,20 +201,85 @@ class PCResolveAdapter:
     #  @return Result of the `caller_inputs` operation.
     def caller_inputs(self, callsite):
         try:
-            from pcresolve._caller_inputs import literal_inputs
-            from pcresolve.program_facts import SourceSpan
-            from pcresolve.source_snapshot import SourceStore
+            from pcresolve import SourceSpan
         except ImportError:
             return None
-        if self._caller_store is None:
-            self._caller_store = SourceStore()
         span = SourceSpan(str(callsite.file_path), callsite.lineno, callsite.col_offset,
                           callsite.end_lineno, callsite.end_col_offset)
-        fact = literal_inputs(span, store=self._caller_store, import_roots=self._import_roots)
-        supporting = fact.get('supporting_source_sha256', {}) if isinstance(fact, dict) else {}
+        operation = getattr(self._analyzer, 'caller_inputs', None)
+        if not callable(operation):
+            return None
+        fact = operation(span)
+        if (not isinstance(fact, dict)
+                or fact.get('schema_version') != 'caller-inputs-0.1'):
+            raise ResolutionError('PCResolve caller-input fact contract is unavailable',
+                                  'pcresolve_fact_contract_unavailable')
+        supporting = fact.get('supporting_source_sha256', {})
         if supporting:
             self._register_supporting_sources(supporting)
         return readonly(fact)
+
+    ## Resolve a versioned source protocol fact for an exact library call
+    ## 为精确库调用解析带版本的源码协议事实
+    #
+    #  @param function Indexed source function containing the call.
+    #  @param node Exact call node from the indexed source snapshot.
+    #  @return Source protocol fact or None when PCResolve cannot prove it.
+    def source_call_protocol(self, function, node):
+        try:
+            from pcresolve import FunctionRef, SourceSpan
+        except ImportError:
+            return None
+        coordinates = (node.lineno, node.col_offset,
+                       getattr(node, 'end_lineno', None),
+                       getattr(node, 'end_col_offset', None))
+        query = (function.identity, coordinates)
+        if query in self._source_protocol_cache:
+            return self._source_protocol_cache[query]
+        operation = getattr(self._analyzer, 'source_call_protocol', None)
+        if not callable(operation):
+            return None
+        identity = function.identity
+        caller = FunctionRef(module=identity.module, qualname=identity.qualname,
+                             file_path=str(identity.file_path or ''),
+                             lineno=identity.lineno or 0)
+        span = SourceSpan.from_ast(str(identity.file_path or ''), node)
+        fact = operation(caller, span)
+        if fact is None:
+            self._source_protocol_cache[query] = None
+            return None
+        expected_caller = {'module': identity.module, 'qualname': identity.qualname,
+                           'file_path': str(identity.file_path or ''),
+                           'lineno': identity.lineno or 0}
+        expected_callsite = {'file_path': str(identity.file_path or ''),
+                             'lineno': coordinates[0], 'col_offset': coordinates[1],
+                             'end_lineno': coordinates[2], 'end_col_offset': coordinates[3]}
+        if (not isinstance(fact, dict)
+                or fact.get('schema_version') != 'source-call-protocol-0.1'
+                or fact.get('status') != 'source_bound'
+                or fact.get('protocol') != 'iterability'
+                or fact.get('caller') != expected_caller
+                or fact.get('callsite') != expected_callsite
+                or fact.get('call_syntax') != ast.dump(node, include_attributes=False)
+                or not isinstance(fact.get('target'), str)
+                or not isinstance(fact.get('fact'), dict)
+                or fact['fact'].get('kind') != 'source_native_type_iterability_predicate'
+                or fact['fact'].get('status') != 'requires_native_type_input'):
+            raise ResolutionError('PCResolve source protocol fact contract is malformed',
+                                  'pcresolve_fact_contract_unavailable')
+        supporting = fact['fact'].get('source_hashes', {})
+        external = {}
+        for path, digest in supporting.items():
+            normalized = _path(path)
+            if normalized in self._flow_hashes:
+                if self._flow_hashes[normalized] != digest:
+                    raise ValueError('Source protocol content changed; create a new analysis context')
+            else:
+                external[path] = digest
+        if external:
+            self._register_supporting_sources(external)
+        self._source_protocol_cache[query] = readonly(fact)
+        return self._source_protocol_cache[query]
 
     ## Validate once per public query, including before a domain cache hit
     ## 每次公开查询都校验源码，包括命中领域缓存前
