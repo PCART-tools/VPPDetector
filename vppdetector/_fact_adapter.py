@@ -219,6 +219,73 @@ class PCResolveAdapter:
             self._register_supporting_sources(supporting)
         return readonly(fact)
 
+    ## Query whether one source class member keeps its indexed binding
+    ## 查询源码类的指定成员是否保持索引时的绑定
+    #
+    #  @param module Source module containing the class.
+    #  @param qualname Fully qualified source class name.
+    #  @param member Class member whose binding is queried.
+    #  @return Validated PCResolve binding fact, or None when unsupported.
+    def source_class_member_binding(self, module, qualname, member, file_path):
+        operation = getattr(self._analyzer, 'source_class_member_binding', None)
+        if not callable(operation):
+            return None
+        fact = operation(module, qualname, member, str(file_path))
+        if fact is None:
+            return None
+        if (not isinstance(fact, dict)
+                or fact.get('schema_version') != 'source-class-member-binding-0.1'
+                or fact.get('kind') != 'source_class_member_binding'
+                or fact.get('basis') != 'source_snapshot'
+                or fact.get('member') != member
+                or fact.get('status') not in ('stable', 'may_be_rebound')
+                or fact.get('member_kind') not in ('assignment', 'definition')
+                or not isinstance(fact.get('member_span'), dict)
+                or (fact.get('member_kind') == 'assignment'
+                    and fact.get('member_expression') is not None
+                    and not isinstance(fact.get('member_expression'), str))
+                or not isinstance(fact.get('source_hashes'), dict)):
+            raise ResolutionError('PCResolve class member binding contract is unavailable',
+                                  'pcresolve_fact_contract_unavailable')
+        self._register_supporting_sources(fact['source_hashes'])
+        return readonly(fact)
+
+    ## Query a source method's return expression for one caught exception
+    ## 查询源码方法对指定异常的回退返回表达式
+    #
+    #  @param module Source module containing the class.
+    #  @param qualname Fully qualified source class name.
+    #  @param member Method whose exception branch is queried.
+    #  @param file_path Exact source file for this class identity.
+    #  @param exception Exception name handled by the method.
+    #  @return Validated PCResolve behavior fact, or None when unsupported.
+    def source_method_exception_fallback(self, module, qualname, member, file_path,
+                                         exception='RuntimeError'):
+        operation = getattr(self._analyzer, 'source_method_exception_fallback', None)
+        if not callable(operation):
+            return None
+        fact = operation(module, qualname, member, str(file_path), exception)
+        if fact is None:
+            return None
+        if (not isinstance(fact, dict)
+                or fact.get('schema_version') != 'source-method-exception-fallback-0.1'
+                or fact.get('kind') != 'source_method_exception_fallback'
+                or fact.get('basis') != 'source_snapshot'
+                or fact.get('status') != 'source_bound'
+                or fact.get('member') != member
+                or fact.get('exception') != exception
+                or not isinstance(fact.get('receiver_parameter'), str)
+                or not isinstance(fact.get('lookup_member'), str)
+                or not isinstance(fact.get('protected_call'), str)
+                or not isinstance(fact.get('protected_span'), dict)
+                or any(type(fact['protected_span'].get(field)) is not int
+                       for field in ('lineno', 'col_offset', 'end_lineno', 'end_col_offset'))
+                or not isinstance(fact.get('source_hashes'), dict)):
+            raise ResolutionError('PCResolve exception fallback contract is unavailable',
+                                  'pcresolve_fact_contract_unavailable')
+        self._register_supporting_sources(fact['source_hashes'])
+        return readonly(fact)
+
     ## Resolve a versioned source protocol fact for an exact library call
     ## 为精确库调用解析带版本的源码协议事实
     #
