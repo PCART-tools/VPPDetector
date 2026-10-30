@@ -14,7 +14,6 @@ from pathlib import Path
 
 from .models import SourceSpan
 
-
 _FIELDS = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 _ASSUMPTIONS = {'source_snapshot_bindings_hold', 'standard_module_global_lookup',
                 'no_external_module_global_mutation'}
@@ -76,6 +75,18 @@ def _state(value, budget, depth=0):
     raise ValueError('Unsupported caller value')
 
 
+## Identify abstract caller values whose contents may be mutated
+## 识别内容可能被修改的调用方抽象值
+#
+#  @param value Abstract caller value.
+#  @return Whether the value contains a mutable list.
+def _mutable_state(value):
+    if value.get('kind') == 'list':
+        return True
+    return (value.get('kind') == 'tuple'
+            and any(_mutable_state(item) for item in value.get('items', [])))
+
+
 ## Resolve a bounded string assigned before a module-level context manager
 ## 解析模块级上下文管理器之前赋值的有界字符串
 #
@@ -102,6 +113,66 @@ def _module_string(node, tree, before_line):
                    and alias.name.split('.')[0] == node.id for alias in statement.names):
                 value = None
     return value
+
+
+## Collect names that bind a value through its validated assignment evidence
+## 收集经已验证赋值证据绑定该值的名称
+#
+#  @param record Caller argument fact with validated source evidence.
+#  @param tree Parsed caller source tree.
+#  @return Names that may refer to the fact value.
+def _fact_binding_names(record, tree):
+    names = set()
+    evidence = record.get('evidence', [])
+    for index, location in enumerate(evidence):
+        if index == 0:
+            matches = [node for node in ast.walk(tree) if isinstance(node, ast.expr)
+                       and all(getattr(node, key) == location[key] for key in _FIELDS)]
+            if len(matches) == 1 and isinstance(matches[0], ast.Name):
+                names.add(matches[0].id)
+            continue
+        matches = [node for node in tree.body
+                   if isinstance(node, (ast.Assign, ast.AnnAssign))
+                   and all(getattr(node, key) == location[key] for key in _FIELDS)]
+        if len(matches) != 1:
+            continue
+        statement = matches[0]
+        targets = (statement.targets if isinstance(statement, ast.Assign)
+                   else [statement.target])
+        names.update(target.id for target in targets if isinstance(target, ast.Name))
+        if isinstance(statement.value, ast.Name):
+            names.add(statement.value.id)
+    return names
+
+
+## Check whether a preceding call can receive or replace a source fact
+## 检查前置调用是否可能接收或替换源码事实
+#
+#  @param boundary Validated call boundary record.
+#  @param call_node Call expression recorded at the boundary.
+#  @param fact_names Names bound to the caller argument fact.
+#  @param source_origin First assignment that establishes the fact.
+#  @param protocol_module Module that provides the bounded return protocol.
+#  @param protocol_origin Assignment that invokes the protocol factory.
+#  @return Whether the boundary can invalidate the fact.
+def _boundary_affects_fact(boundary, call_node, fact_names, source_origin,
+                           protocol_module=None, protocol_origin=None):
+    location = boundary['evidence']
+    boundary_position = (location['lineno'], location['col_offset'])
+    if protocol_module is not None:
+        if (protocol_origin is not None
+                and all(location[key] == protocol_origin[key] for key in _FIELDS)):
+            return False
+        if boundary['target'].rpartition('.')[0] == protocol_module:
+            return True
+    if (source_origin is not None and boundary_position
+            <= (source_origin['lineno'], source_origin['col_offset'])):
+        return False
+    call_arguments = list(call_node.args)
+    call_arguments.extend(keyword.value for keyword in call_node.keywords)
+    argument_names = {node.id for argument in call_arguments for node in ast.walk(argument)
+                      if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    return bool(fact_names & argument_names)
 
 
 ## Recover file text only from the exact open resource bound to this call
@@ -298,7 +369,11 @@ def caller_arguments(adapter, call, node, target, entry):
                 or fact.get('status') != 'source_bound'
                 or fact.get('scope') != 'argument_reads_on_normal_module_prefix'
                 or fact.get('runtime_values_observed') is not False
-                or fact.get('boundaries') != []
+                or not isinstance(fact.get('boundaries'), list)
+                or any(not isinstance(item, dict)
+                       or item.get('reason') != 'caller_prefix_call_effect_unconfirmed'
+                       or not _span(item.get('evidence'), path)
+                       for item in fact['boundaries'])
                 or not (fact.get('target') in names or receiver_bound)
                 or fact.get('call_syntax') != ast.dump(node, include_attributes=False)
                 or not isinstance(fact.get('assumptions'), list)
@@ -339,6 +414,20 @@ def caller_arguments(adapter, call, node, target, entry):
             return None
         source_node = source_calls[0]
 
+        # 检查每条调用边界是否可能改写协议事实所依赖的工厂模块
+        boundaries = fact['boundaries']
+        boundary_calls = []
+        for boundary in boundaries:
+            location = boundary['evidence']
+            matching = [item for item in source_tree.body
+                        if isinstance(item, (ast.Assign, ast.AnnAssign))
+                        and all(getattr(item, key) == location[key] for key in _FIELDS)]
+            if (not isinstance(boundary.get('target'), str)
+                    or len(matching) != 1
+                    or not isinstance(matching[0].value, ast.Call)):
+                return None
+            boundary_calls.append((boundary, matching[0].value))
+
         binding = fact.get('target_binding_evidence')
         receiver_binding_exact = (receiver_bound and isinstance(binding, list)
             and len(binding) == 1 and _span(binding[0], path)
@@ -370,7 +459,17 @@ def caller_arguments(adapter, call, node, target, entry):
                     or any(evidence[0][key] != getattr(argument, key) for key in _FIELDS)):
                 return None
             if record['status'] == 'source_literal':
-                result[slot] = _state(record.get('value'), budget)
+                value = _state(record.get('value'), budget)
+                if _mutable_state(value):
+                    assignments = record.get('evidence', [])[1:]
+                    source_origin = min(assignments,
+                        key=lambda item: (item['lineno'], item['col_offset']),
+                        default=None)
+                    names = _fact_binding_names(record, source_tree)
+                    if any(_boundary_affects_fact(boundary, boundary_call, names,
+                            source_origin) for boundary, boundary_call in boundary_calls):
+                        continue
+                result[slot] = value
             elif record['status'] == 'source_protocol':
                 protocol = record.get('protocol')
                 if (not isinstance(protocol, dict) or protocol.get('kind') != 'iterable'
@@ -379,12 +478,28 @@ def caller_arguments(adapter, call, node, target, entry):
                         or protocol.get('supporting_source_sha256') != supporting
                         or not supporting):
                     return None
+                factory_module = protocol['call_target'].rpartition('.')[0]
+                protocol_origin = next((boundary['evidence']
+                    for boundary, _ in boundary_calls
+                    if boundary['target'] == protocol['call_target']
+                    and any(all(boundary['evidence'][key] == item[key]
+                                for key in _FIELDS) for item in evidence[1:])), None)
+                source_origin = min(evidence[1:],
+                    key=lambda item: (item['lineno'], item['col_offset']),
+                    default=None)
+                names = _fact_binding_names(record, source_tree)
+                affected = any(_boundary_affects_fact(boundary, boundary_call,
+                    names, source_origin, factory_module, protocol_origin)
+                    for boundary, boundary_call in boundary_calls)
+                if affected:
+                    continue
                 result[slot] = {'kind': 'iterable', 'basis': protocol['basis'],
                                 'call_target': protocol['call_target']}
             elif 'value' in record:
                 return None
-        file_values = _caller_file_values(
+        file_values = (_caller_file_values(
             fact, source_node, source_tree, path, call.execution_directory)
+            if not boundaries else {})
         for slot, value in file_values.items():
             if slot not in result:
                 result[slot] = _state(value, budget)
