@@ -10,6 +10,7 @@ import ast
 import tokenize
 from collections import deque
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
@@ -822,6 +823,10 @@ def build_source_index(
     if not root.exists():
         raise FileNotFoundError("Package root does not exist: {}".format(root))
     import_roots = normalized_import_roots(source)
+    # Reuse path computations only during this build; source contents are still checked
+    # 路径计算仅在本次索引构建内复用，源码内容仍按原流程检查
+    module_name = lru_cache(maxsize=None)(module_name_for_path)
+    resolve_path = lru_cache(maxsize=None)(Path.resolve)
     dependency_modules = set(source.dependency_modules)
     discovered_dependency_modules = set()
     normalized_source = SourceContext(
@@ -837,7 +842,8 @@ def build_source_index(
         pending = [entry_path] if entry_path.is_file() else []
         if pending:
             pending.extend(_package_initializers(
-                entry_path, root, import_roots, dependency_modules
+                entry_path, root, import_roots, dependency_modules,
+                module_name=module_name, resolve_path=resolve_path
             ))
     else:
         pending = list(reversed(tuple(_python_files(root))))
@@ -896,7 +902,7 @@ def build_source_index(
             source_trees[file_path] = tree
         else:
             tree = source_trees[file_path]
-        module = module_name_for_path(file_path, import_roots)
+        module = module_name(file_path, import_roots)
         if is_new_file:
             module_bodies.setdefault(module, []).append((str(file_path), tree.body))
         aliases = {}
@@ -999,7 +1005,7 @@ def build_source_index(
                                 if found:
                                     locations[related_module] = found
                             for dependency in found:
-                                dependency_module = module_name_for_path(
+                                dependency_module = module_name(
                                     dependency, import_roots
                                 )
                                 if (not _within_source(dependency, root)
@@ -1027,11 +1033,12 @@ def build_source_index(
                                 selected_paths = (
                                     dependency,
                                     *_package_initializers(
-                                        dependency, root, import_roots, dependency_modules
+                                        dependency, root, import_roots, dependency_modules,
+                                        module_name=module_name, resolve_path=resolve_path
                                     ),
                                 )
                                 for selected in selected_paths:
-                                    selected_module = module_name_for_path(
+                                    selected_module = module_name(
                                         selected, import_roots
                                     )
                                     selected_targets = _forwarded_qualnames_for_module(
@@ -1171,13 +1178,18 @@ def _module_files(
 #  @param root AST root or source root used for lookup.
 #  @param import_roots Module roots used to resolve source imports.
 #  @param dependency_modules Input value of type `Sequence[str]`.
+#  @param module_name Optional build-local module-name lookup.
+#  @param resolve_path Optional build-local path resolver.
 #  @return Result of type `Iterable[Path]`.
 def _package_initializers(
     path,
     root,
     import_roots,
     dependency_modules=(),
+    *, module_name=None, resolve_path=None,
 ):
+    module_name = module_name or module_name_for_path
+    resolve_path = resolve_path or Path.resolve
     for import_root in import_roots:
 
         # A standalone file may itself be the inferred import root. There
@@ -1193,8 +1205,8 @@ def _package_initializers(
         while parent != import_root:
             candidate = parent / "__init__.py"
             if candidate.is_file():
-                resolved = candidate.resolve()
-                module = module_name_for_path(resolved, import_roots)
+                resolved = resolve_path(candidate)
+                module = module_name(resolved, import_roots)
                 if (_within_source(resolved, root)
                         or _is_dependency_module(module, dependency_modules)):
                     yield resolved
