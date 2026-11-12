@@ -12,8 +12,8 @@ from ._program_facts import identity_from_target
 ## Validate and convert a producer target into a source identity
 ## 校验并将生产者目标转换为源码身份
 #
-#  @param value Value or producer record being interpreted.
-#  @return Result of the `_identity` operation.
+#  @param value Value or producer record being interpreted
+#  @return Result of the `_identity` operation
 def _identity(value):
     try:
         return identity_from_target(value)
@@ -24,9 +24,9 @@ def _identity(value):
 ## Return a validated fixed-key access set, or no closed footprint
 ## 返回已验证的固定键访问集合；证据不足时不推断封闭键集
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param function Indexed source function under analysis.
-#  @return Result of the `closed_keys` operation.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param function Indexed source function under analysis
+#  @return Result of the `closed_keys` operation
 def closed_keys(analysis, function):
     summaries = [item for item in analysis.functions
                  if isinstance(item, dict)

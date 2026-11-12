@@ -33,8 +33,8 @@ class SignatureFacts:
     ## Create signature facts from an AST argument list
     ## 根据AST参数列表创建签名事实
     #
-    #  @param arguments Function argument list or call arguments.
-    #  @return Result of type `'SignatureFacts'`.
+    #  @param arguments Function argument list or call arguments
+    #  @return Result of type `'SignatureFacts'`
     @classmethod
     def from_arguments(cls, arguments):
         return cls(
@@ -48,8 +48,8 @@ class SignatureFacts:
     ## Check whether the signature accepts the requested variadic channel
     ## 检查签名是否接受指定的可变参数通道
     #
-    #  @param kind Variadic channel or operation kind being checked.
-    #  @return Result of type `bool`.
+    #  @param kind Variadic channel or operation kind being checked
+    #  @return Result of type `bool`
     def accepts_variadic(self, kind):
         if kind is VariadicKind.KEYWORD:
             return self.kwarg is not None
@@ -71,7 +71,7 @@ class IndexedFunction:
     ## Return the variadic parameter names and their channel kinds
     ## 返回可变参数名称及对应通道类型
     #
-    #  @return Result of type `Tuple[Tuple[str, VariadicKind], ...]`.
+    #  @return Result of type `Tuple[Tuple[str, VariadicKind], ...]`
     @property
     def variadic_parameters(self):
         parameters = []
@@ -114,8 +114,8 @@ class SourceIndex:
     ## Find one indexed function matching the requested source identity
     ## 查找与请求源码身份匹配的索引函数
     #
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of type `Optional[IndexedFunction]`.
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of type `Optional[IndexedFunction]`
     def find(self, identity):
         requested_path = identity.file_path.resolve() if identity.file_path else None
         candidates = [
@@ -144,8 +144,8 @@ class SourceIndex:
     ## Resolve an exact import-backed API or source class through PCResolve
     ## 通过PCResolve解析精确的导入API或源码类
     #
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of type `Optional[IndexedFunction]`.
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of type `Optional[IndexedFunction]`
     def resolve_imported(self, identity):
         if identity.file_path or identity.lineno:
             constructors = [
@@ -179,8 +179,8 @@ class SourceIndex:
     ## Locate a source class; invocation phase selection belongs to PCResolve
     ## 定位源码类；调用阶段由PCResolve确定
     #
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of type `Optional[FunctionIdentity]`.
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of type `Optional[FunctionIdentity]`
     def resolve_class(self, identity):
         if identity.file_path or identity.lineno:
             candidates = [item for item in self.classes
@@ -195,8 +195,8 @@ class SourceIndex:
     ## Canonicalize a class prefix; PCResolve still owns inherited lookup
     ## 规范化类前缀，但将继承查找交由PCResolve
     #
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of type `Optional[FunctionIdentity]`.
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of type `Optional[FunctionIdentity]`
     def resolve_method_identity(self, identity):
         function = self.find(identity)
         if function is not None:
@@ -220,7 +220,7 @@ class SourceIndex:
     ## Build and cache the source definition lookup table
     ## 构建并缓存源码定义查找表
     #
-    #  @return Result of the `_definitions` operation.
+    #  @return Result of the `_definitions` operation
     def _definitions(self):
         if self._definition_index is None:
             from pcresolve.call_resolution import DefinitionIndex, DefinitionRecord
@@ -251,10 +251,10 @@ class SourceIndex:
     ## Look up an exact position within this fixed source snapshot
     ## 在固定源码快照中按精确位置查找定义
     #
-    #  @param file_path Path of the source file.
-    #  @param lineno Input value of type `int`.
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of type `Optional[IndexedFunction]`.
+    #  @param file_path Path of the source file
+    #  @param lineno Input value of type `int`
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of type `Optional[IndexedFunction]`
     def find_by_location(
         self, file_path, lineno, *, identity=None
     ):
@@ -277,7 +277,7 @@ class SourceIndex:
     ## Build source-position indexes for functions and constructors
     ## 为函数和构造器建立源码位置索引
     #
-    #  @return Result of type `None`.
+    #  @return Result of type `None`
     def _prepare_locations(self):
         members = self._location_members
         if members is not None and members[0] is self.functions and members[1] is self.constructors:
@@ -287,8 +287,8 @@ class SourceIndex:
         ## Return the lookup position for one source identity
         ## 返回指定源码身份的查找位置
         #
-        #  @param identity Source-level identity used for lookup.
-        #  @return Result of type `tuple`.
+        #  @param identity Source-level identity used for lookup
+        #  @return Result of type `tuple`
         def position(identity):
             path = identity.file_path
             if path not in paths:
@@ -316,9 +316,9 @@ class _FunctionCollector(ast.NodeVisitor):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @param module Python module name associated with the source.
-    #  @param file_path Path of the source file.
-    #  @return Result of type `None`.
+    #  @param module Python module name associated with the source
+    #  @param file_path Path of the source file
+    #  @return Result of type `None`
     def __init__(self, module, file_path):
         self.module = module
         self.file_path = file_path
@@ -332,8 +332,8 @@ class _FunctionCollector(ast.NodeVisitor):
     ## Visit conditional definitions while retaining their source conditions
     ## 访问条件定义并保留其源码条件
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of type `None`.
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of type `None`
     def visit_If(self, node):
         self.conditions.append(node.test)
         self.generic_visit(node)
@@ -341,8 +341,8 @@ class _FunctionCollector(ast.NodeVisitor):
     ## Traverse the remaining AST structure using the collector policy
     ## 按照收集器策略遍历其余AST结构
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of type `None`.
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of type `None`
     def generic_visit(self, node):
 
         # Visit statement structure normally and collect expression lambdas
@@ -357,8 +357,8 @@ class _FunctionCollector(ast.NodeVisitor):
     ## Collect lambda definitions from an expression without recursive overflow
     ## 从表达式中收集lambda定义并避免递归溢出
     #
-    #  @param expression Input value of type `ast.expr`.
-    #  @return Result of type `None`.
+    #  @param expression Input value of type `ast.expr`
+    #  @return Result of type `None`
     def _collect_lambdas(self, expression):
 
         # An iterative expression walk keeps giant non-lambda expressions safe.
@@ -387,8 +387,8 @@ class _FunctionCollector(ast.NodeVisitor):
     ## Inspect a class node while resolving the requested definition
     ## 检查类节点并解析请求的定义
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of type `None`.
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of type `None`
     def visit_ClassDef(self, node):
         class_qualname = ".".join((*self.scope, node.name))
         class_identity = FunctionIdentity(
@@ -451,24 +451,24 @@ class _FunctionCollector(ast.NodeVisitor):
     ## Inspect a function node while collecting matching API facts
     ## 检查函数节点并收集匹配的API事实
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of type `None`.
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of type `None`
     def visit_FunctionDef(self, node):
         self._visit_function(node)
 
     ## Collect an async function using the shared function visitor
     ## 使用通用函数访问逻辑收集异步函数
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of type `None`.
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of type `None`
     def visit_AsyncFunctionDef(self, node):
         self._visit_function(node)
 
     ## Index one function and visit its source-level nested definitions
     ## 索引单个函数并访问其源码级嵌套定义
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of type `None`.
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of type `None`
     def _visit_function(self, node):
         qualname = ".".join((*self.scope, node.name))
         identity = FunctionIdentity(
@@ -500,8 +500,8 @@ class _FunctionCollector(ast.NodeVisitor):
 ## Retain breadth-first import order without traversing expression payloads
 ## 按广度优先顺序读取导入，同时跳过表达式子树
 #
-#  @param tree Value named `tree` supplied by the enclosing analysis.
-#  @return Result of the `_import_statements` operation.
+#  @param tree Value named `tree` supplied by the enclosing analysis
+#  @return Result of the `_import_statements` operation
 def _import_statements(tree):
     pending = deque([tree])
     while pending:
@@ -520,6 +520,8 @@ def _import_statements(tree):
 #  @param import_facts PCResolve import-fact resolver
 #  @param resolve_relative_module PCResolve relative-import resolver
 #  @param statement_scope_facts PCResolve lexical binding resolver
+#  @param is_package Whether the current module is a package
+#  @param target_qualnames Optional target qualified names limiting forwarding analysis
 #  @return Imported module and callable names reached by direct variadic forwarding
 def _forwarded_import_modules(
     tree, module, is_package, import_facts, resolve_relative_module, statement_scope_facts,
@@ -609,6 +611,11 @@ def _forwarded_import_modules(
 
     scope_alias_cache = {}
 
+    ## Collect imported aliases visible in the selected scope
+    ## 收集所选作用域内可见的导入别名
+    #
+    #  @param scope Lexical scope whose aliases are collected
+    #  @return Aliases bound in the selected scope
     def aliases_for_scope(scope):
         cached = scope_alias_cache.get(id(scope))
         if cached is not None:
@@ -760,9 +767,9 @@ def _forwarded_import_modules(
 ## Match an imported module to a statically forwarded module path
 ## 判断导入模块是否位于静态可见的变参转发路径上
 #
-#  @param module Imported module name being considered.
-#  @param forwarded_modules Module names and callable paths receiving forwarded arguments.
-#  @return Whether the import is relevant to a forwarded callable.
+#  @param module Imported module name being considered
+#  @param forwarded_modules Module names and callable paths receiving forwarded arguments
+#  @return Whether the import is relevant to a forwarded callable
 def _is_forwarded_module(module, forwarded_modules):
     for candidate, qualnames in forwarded_modules.items():
         if module == candidate:
@@ -780,9 +787,9 @@ def _is_forwarded_module(module, forwarded_modules):
 ## Keep only the callable suffix represented by one imported module
 ## 保留导入模块对应的目标可调用对象限定名后缀
 #
-#  @param module Imported module name being indexed.
-#  @param forwarded_modules Module names and callable paths receiving forwarded arguments.
-#  @return Callable names available within this module.
+#  @param module Imported module name being indexed
+#  @param forwarded_modules Module names and callable paths receiving forwarded arguments
+#  @return Callable names available within this module
 def _forwarded_qualnames_for_module(module, forwarded_modules):
     result = set()
     for candidate, qualnames in forwarded_modules.items():
@@ -804,9 +811,9 @@ def _forwarded_qualnames_for_module(module, forwarded_modules):
 ## Index all sources, or one located API's package-local import closure
 ## 索引完整源码，或构建指定API的包内导入闭包
 #
-#  @param source Library source directory, file, or source context.
-#  @param target_api Source identity of the API being analyzed.
-#  @return Result of type `SourceIndex`.
+#  @param source Library source directory, file, or source context
+#  @param target_api Source identity of the API being analyzed
+#  @return Result of type `SourceIndex`
 def build_source_index(
     source, *, target_api=None
 ):
@@ -1114,9 +1121,9 @@ def build_source_index(
 ## Check whether a path is contained within a source root
 ## 检查路径是否位于源码根目录内
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @param root AST root or source root used for lookup.
-#  @return Result of type `bool`.
+#  @param path Filesystem path of the source being read or checked
+#  @param root AST root or source root used for lookup
+#  @return Result of type `bool`
 def _within_source(path, root):
     if root.is_file():
         return path == root
@@ -1130,9 +1137,9 @@ def _within_source(path, root):
 ## Check whether a module belongs to an excluded dependency namespace
 ## 检查模块是否属于排除的依赖命名空间
 #
-#  @param module Python module name associated with the source.
-#  @param dependency_modules Input value of type `Sequence[str]`.
-#  @return Result of type `bool`.
+#  @param module Python module name associated with the source
+#  @param dependency_modules Input value of type `Sequence[str]`
+#  @return Result of type `bool`
 def _is_dependency_module(module, dependency_modules):
     return any(module == dependency or module.startswith(dependency + ".")
                for dependency in dependency_modules)
@@ -1141,11 +1148,11 @@ def _is_dependency_module(module, dependency_modules):
 ## Resolve source files belonging to one module name
 ## 解析指定模块名对应的源码文件
 #
-#  @param module Python module name associated with the source.
-#  @param root AST root or source root used for lookup.
-#  @param import_roots Module roots used to resolve source imports.
-#  @param dependency_modules Input value of type `Sequence[str]`.
-#  @return Result of type `Tuple[Path, ...]`.
+#  @param module Python module name associated with the source
+#  @param root AST root or source root used for lookup
+#  @param import_roots Module roots used to resolve source imports
+#  @param dependency_modules Input value of type `Sequence[str]`
+#  @return Result of type `Tuple[Path, ...]`
 def _module_files(
     module,
     root,
@@ -1174,13 +1181,13 @@ def _module_files(
 ## Return package initializer files for an import path
 ## 返回导入路径对应的包初始化文件
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @param root AST root or source root used for lookup.
-#  @param import_roots Module roots used to resolve source imports.
-#  @param dependency_modules Input value of type `Sequence[str]`.
-#  @param module_name Optional build-local module-name lookup.
-#  @param resolve_path Optional build-local path resolver.
-#  @return Result of type `Iterable[Path]`.
+#  @param path Filesystem path of the source being read or checked
+#  @param root AST root or source root used for lookup
+#  @param import_roots Module roots used to resolve source imports
+#  @param dependency_modules Input value of type `Sequence[str]`
+#  @param module_name Optional build-local module-name lookup
+#  @param resolve_path Optional build-local path resolver
+#  @return Result of type `Iterable[Path]`
 def _package_initializers(
     path,
     root,
@@ -1216,8 +1223,8 @@ def _package_initializers(
 ## Normalize and deduplicate import roots for source lookup
 ## 规范化并去重源码查找使用的导入根目录
 #
-#  @param source Library source directory, file, or source context.
-#  @return Result of type `Tuple[Path, ...]`.
+#  @param source Library source directory, file, or source context
+#  @return Result of type `Tuple[Path, ...]`
 def normalized_import_roots(source):
     if source.import_roots:
         return tuple(path.resolve() for path in source.import_roots)
@@ -1235,9 +1242,9 @@ def normalized_import_roots(source):
 ## Derive a Python module name from a file and its import roots
 ## 根据源码文件及导入根目录推导Python模块名
 #
-#  @param file_path Path of the source file.
-#  @param import_roots Module roots used to resolve source imports.
-#  @return Result of type `str`.
+#  @param file_path Path of the source file
+#  @param import_roots Module roots used to resolve source imports
+#  @return Result of type `str`
 def module_name_for_path(file_path, import_roots):
     for import_root in import_roots:
         try:
@@ -1258,8 +1265,8 @@ def module_name_for_path(file_path, import_roots):
 ## Enumerate Python source files under the requested root
 ## 枚举指定根目录下的Python源码文件
 #
-#  @param root AST root or source root used for lookup.
-#  @return Result of type `Iterable[Path]`.
+#  @param root AST root or source root used for lookup
+#  @return Result of type `Iterable[Path]`
 def _python_files(root):
     if root.is_file():
         if root.suffix in {".py", ".pyi"}:
@@ -1273,8 +1280,8 @@ def _python_files(root):
 ## Read the dotted name of a source decorator expression
 ## 读取源码装饰器表达式的点分隔名称
 #
-#  @param node AST node or source expression being analyzed.
-#  @return Result of type `str`.
+#  @param node AST node or source expression being analyzed
+#  @return Result of type `str`
 def _decorator_name(node):
     if isinstance(node, ast.Name):
         return node.id
@@ -1289,7 +1296,7 @@ def _decorator_name(node):
 ## Check whether a function is marked as a typing overload
 ## 检查函数是否标记为typing重载
 #
-#  @param node AST node or source expression being analyzed.
-#  @return Result of type `bool`.
+#  @param node AST node or source expression being analyzed
+#  @return Result of type `bool`
 def _is_overload_decorator(node):
     return _decorator_name(node).split(".")[-1] == "overload"

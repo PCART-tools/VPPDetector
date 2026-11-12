@@ -20,11 +20,11 @@ _COORDINATES = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 ## Return one independently guarded body-binding fact or no fallback
 ## 返回一条独立校验的函数体绑定事实；无法证明时不回退
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param function Indexed source function under analysis.
-#  @param summary Producer summary for the current function.
-#  @return Result of the `binding` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param function Indexed source function under analysis
+#  @param summary Producer summary for the current function
+#  @return Result of the `binding` operation
 def binding(context, analysis, function, summary):
     records = summary.get('fresh_function_decorations')
     if not isinstance(records, (list, tuple)) or len(records) != 1:
@@ -57,10 +57,10 @@ def binding(context, analysis, function, summary):
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param value Value or producer record being interpreted.
-    #  @param owner Source identity that owns the queried behavior.
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of the `witness` operation.
+    #  @param value Value or producer record being interpreted
+    #  @param owner Source identity that owns the queried behavior
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of the `witness` operation
     def witness(value, owner, node):
         return (isinstance(value, dict) and value.get('file_path') == str(owner.file_path)
                 and all(value.get(field) == getattr(node, field) for field in _COORDINATES))
@@ -73,10 +73,10 @@ def binding(context, analysis, function, summary):
 ## Validate the source observation premises shared by fresh callable proofs
 ## 校验新可调用对象证明共用的源码观测前提
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param fact Producer fact being validated or interpreted.
-#  @return Result of the `observation_guard` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param fact Producer fact being validated or interpreted
+#  @return Result of the `observation_guard` operation
 def observation_guard(context, analysis, fact):
     observer = fact.get('observation_guard')
     required = _ASSUMPTIONS - {'fresh_source_function_before_name_binding',
@@ -97,10 +97,10 @@ def observation_guard(context, analysis, fact):
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param value Value or producer record being interpreted.
-    #  @param owner Source identity that owns the queried behavior.
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of the `witness` operation.
+    #  @param value Value or producer record being interpreted
+    #  @param owner Source identity that owns the queried behavior
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of the `witness` operation
     def witness(value, owner, node):
         return (isinstance(value, dict) and value.get('file_path') == str(owner.file_path)
                 and all(value.get(field) == getattr(node, field) for field in _COORDINATES))
@@ -152,9 +152,9 @@ def observation_guard(context, analysis, fact):
 ## Accept only the isolated native string/cache formatting obligation
 ## 仅接受隔离的内建字符串及缓存格式化操作
 #
-#  @param fact Producer fact being validated or interpreted.
-#  @param effect Value named `effect` supplied by the enclosing analysis.
-#  @return Result of the `documentation_format` operation.
+#  @param fact Producer fact being validated or interpreted
+#  @param effect Value named `effect` supplied by the enclosing analysis
+#  @return Result of the `documentation_format` operation
 def documentation_format(fact, effect):
     proof = effect.get('method_binding')
     callback = effect.get('callback_guard')

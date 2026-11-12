@@ -18,8 +18,8 @@ from .models import FunctionIdentity, SourceSpan
 ## Resolve and interpret the supported effects of a call expression
 ## 解析并解释调用表达式的受支持效果
 #
-#  @param text Source or expression text to parse or compare.
-#  @return Result of the `_call` operation.
+#  @param text Source or expression text to parse or compare
+#  @return Result of the `_call` operation
 def _call(text):
     try:
         node = text if isinstance(text, ast.Call) else ast.parse(text, mode='eval').body
@@ -31,12 +31,12 @@ def _call(text):
 ## Require a trusted original-call checkpoint and the exact source rejection guard
 ## 要求可信的原始调用检查点与精确的源码拒绝守卫
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param call Original client call or its call-specific evidence.
-#  @param change Description of the removed or renamed parameter.
-#  @param original Value named `original` supplied by the enclosing analysis.
-#  @return Result of the `keyword_check` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param call Original client call or its call-specific evidence
+#  @param change Description of the removed or renamed parameter
+#  @param original Value named `original` supplied by the enclosing analysis
+#  @return Result of the `keyword_check` operation
 def keyword_check(context, entry, call, change, original):
     observations = call.observed_keyword_checks
     if len(observations) != 1:

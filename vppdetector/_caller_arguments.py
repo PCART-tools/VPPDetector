@@ -23,9 +23,9 @@ _MAX_CALLER_FILE_SIZE = 1024 * 1024
 ## Convert source coordinates into a validated source span
 ## 将源码坐标转换为经过校验的源码范围
 #
-#  @param record Producer record whose fields are validated.
-#  @param path Filesystem path of the source being read or checked.
-#  @return Result of the `_span` operation.
+#  @param record Producer record whose fields are validated
+#  @param path Filesystem path of the source being read or checked
+#  @return Result of the `_span` operation
 def _span(record, path):
     return (isinstance(record, dict) and record.get('file_path') == path
             and all(type(record.get(key)) is int for key in _FIELDS)
@@ -38,10 +38,10 @@ def _span(record, path):
 ## Build a bounded abstract value from caller-provided literal input
 ## 根据调用方提供的字面量输入构建有界抽象值
 #
-#  @param value Value or producer record being interpreted.
-#  @param budget Maximum amount of literal or container state to model.
-#  @param depth Current recursive or structural analysis depth.
-#  @return Result of the `_state` operation.
+#  @param value Value or producer record being interpreted
+#  @param budget Maximum amount of literal or container state to model
+#  @param depth Current recursive or structural analysis depth
+#  @return Result of the `_state` operation
 def _state(value, budget, depth=0):
     budget[0] -= 1
     if budget[0] < 0 or depth > 16 or not isinstance(value, dict):
@@ -78,8 +78,8 @@ def _state(value, budget, depth=0):
 ## Identify abstract caller values whose contents may be mutated
 ## 识别内容可能被修改的调用方抽象值
 #
-#  @param value Abstract caller value.
-#  @return Whether the value contains a mutable list.
+#  @param value Abstract caller value
+#  @return Whether the value contains a mutable list
 def _mutable_state(value):
     if value.get('kind') == 'list':
         return True
@@ -90,10 +90,10 @@ def _mutable_state(value):
 ## Resolve a bounded string assigned before a module-level context manager
 ## 解析模块级上下文管理器之前赋值的有界字符串
 #
-#  @param node String expression whose source value is requested.
-#  @param tree Parsed caller source tree.
-#  @param before_line Line before which the assignment must occur.
-#  @return Static string value or `None` when the binding is unconfirmed.
+#  @param node String expression whose source value is requested
+#  @param tree Parsed caller source tree
+#  @param before_line Line before which the assignment must occur
+#  @return Static string value or `None` when the binding is unconfirmed
 def _module_string(node, tree, before_line):
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -118,9 +118,9 @@ def _module_string(node, tree, before_line):
 ## Collect names that bind a value through its validated assignment evidence
 ## 收集经已验证赋值证据绑定该值的名称
 #
-#  @param record Caller argument fact with validated source evidence.
-#  @param tree Parsed caller source tree.
-#  @return Names that may refer to the fact value.
+#  @param record Caller argument fact with validated source evidence
+#  @param tree Parsed caller source tree
+#  @return Names that may refer to the fact value
 def _fact_binding_names(record, tree):
     names = set()
     evidence = record.get('evidence', [])
@@ -148,13 +148,13 @@ def _fact_binding_names(record, tree):
 ## Check whether a preceding call can receive or replace a source fact
 ## 检查前置调用是否可能接收或替换源码事实
 #
-#  @param boundary Validated call boundary record.
-#  @param call_node Call expression recorded at the boundary.
-#  @param fact_names Names bound to the caller argument fact.
-#  @param source_origin First assignment that establishes the fact.
-#  @param protocol_module Module that provides the bounded return protocol.
-#  @param protocol_origin Assignment that invokes the protocol factory.
-#  @return Whether the boundary can invalidate the fact.
+#  @param boundary Validated call boundary record
+#  @param call_node Call expression recorded at the boundary
+#  @param fact_names Names bound to the caller argument fact
+#  @param source_origin First assignment that establishes the fact
+#  @param protocol_module Module that provides the bounded return protocol
+#  @param protocol_origin Assignment that invokes the protocol factory
+#  @return Whether the boundary can invalidate the fact
 def _boundary_affects_fact(boundary, call_node, fact_names, source_origin,
                            protocol_module=None, protocol_origin=None):
     location = boundary['evidence']
@@ -178,12 +178,12 @@ def _boundary_affects_fact(boundary, call_node, fact_names, source_origin,
 ## Recover file text only from the exact open resource bound to this call
 ## 仅从与当前调用精确绑定的open资源中恢复文件文本
 #
-#  @param fact Validated PCResolve caller input record.
-#  @param source_node Exact call node in the caller source.
-#  @param tree Parsed caller source tree.
-#  @param path Absolute caller source path.
-#  @param execution_directory Absolute project execution directory.
-#  @return File text record by argument slot, or an empty mapping.
+#  @param fact Validated PCResolve caller input record
+#  @param source_node Exact call node in the caller source
+#  @param tree Parsed caller source tree
+#  @param path Absolute caller source path
+#  @param execution_directory Absolute project execution directory
+#  @return File text record by argument slot, or an empty mapping
 def _caller_file_values(fact, source_node, tree, path, execution_directory):
     if execution_directory is None:
         return {}
@@ -337,12 +337,12 @@ def _caller_file_values(fact, source_node, tree, path, execution_directory):
 ## Return typed slot values and the target for this exact source call
 ## 返回此精确源码调用的类型化参数槽位和目标
 #
-#  @param adapter Value named `adapter` supplied by the enclosing analysis.
-#  @param call Original client call or its call-specific evidence.
-#  @param node AST node or source expression being analyzed.
-#  @param target Producer target record or selected source target.
-#  @param entry Resolved source entry for the requested API.
-#  @return Result of the `caller_arguments` operation.
+#  @param adapter Value named `adapter` supplied by the enclosing analysis
+#  @param call Original client call or its call-specific evidence
+#  @param node AST node or source expression being analyzed
+#  @param target Producer target record or selected source target
+#  @param entry Resolved source entry for the requested API
+#  @return Result of the `caller_arguments` operation
 def caller_arguments(adapter, call, node, target, entry):
     if (not isinstance(call.callsite, SourceSpan)
             or not all(type(getattr(call.callsite, key)) is int for key in _FIELDS)):

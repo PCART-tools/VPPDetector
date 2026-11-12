@@ -22,9 +22,9 @@ class ResolutionError(RuntimeError):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @param message Value named `message` supplied by the enclosing analysis.
-    #  @param code Value named `code` supplied by the enclosing analysis.
-    #  @return None.
+    #  @param message Value named `message` supplied by the enclosing analysis
+    #  @param code Value named `code` supplied by the enclosing analysis
+    #  @return None
     def __init__(self, message, code="flow_analysis_failed"):
         super().__init__(message)
         self.code = code
@@ -59,8 +59,8 @@ _CALL_LISTS = (
 ## Normalize a filesystem path for stable identity comparisons
 ## 规范化文件系统路径以便稳定比较身份
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @return Result of the `_path` operation.
+#  @param path Filesystem path of the source being read or checked
+#  @return Result of the `_path` operation
 def _path(path):
     return os.path.normcase(os.path.abspath(path))
 
@@ -68,8 +68,8 @@ def _path(path):
 ## Return the content digest of a source file when it can be read
 ## 在源码文件可读取时返回其内容摘要
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @return Result of the `_digest` operation.
+#  @param path Filesystem path of the source being read or checked
+#  @return Result of the `_digest` operation
 def _digest(path):
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -80,8 +80,8 @@ def _digest(path):
 ## Read once while retaining both byte and flow-text source identities
 ## 一次读取源码，同时保留字节摘要和flow文本摘要
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @return Result of the `_source_digests` operation.
+#  @param path Filesystem path of the source being read or checked
+#  @return Result of the `_source_digests` operation
 def _source_digests(path):
     try:
         raw = path.read_bytes()
@@ -102,8 +102,8 @@ def _source_digests(path):
 ## Return the digest under PCResolve flow decoding and newline rules
 ## 按PCResolve的flow解码及换行规则返回源码摘要
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @return Result of the `_flow_digest` operation.
+#  @param path Filesystem path of the source being read or checked
+#  @return Result of the `_flow_digest` operation
 def _flow_digest(path):
     try:
         with open(path, encoding='utf-8-sig') as stream:
@@ -118,8 +118,8 @@ class PCResolveAdapter:
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @param index Source index used for definitions and imports.
-    #  @return None.
+    #  @param index Source index used for definitions and imports
+    #  @return None
     def __init__(self, index):
         try:
             from pcresolve import FlowAnalyzer, FlowCall
@@ -161,7 +161,7 @@ class PCResolveAdapter:
     ## Reject supporting-source changes after a fact snapshot is registered
     ## 在登记事实快照后拒绝支持源码发生变化
     #
-    #  @return Result of the `_validate_supporting_sources` operation.
+    #  @return Result of the `_validate_supporting_sources` operation
     def _validate_supporting_sources(self):
         if any(_flow_digest(path) != digest for path, digest in self._supporting_hashes.items()):
             raise ValueError('Source protocol content changed; create a new analysis context')
@@ -169,8 +169,8 @@ class PCResolveAdapter:
     ## Validate and record source hashes referenced by supporting facts
     ## 校验并登记支持事实引用的源码哈希
     #
-    #  @param hashes Source-content hashes supplied by the producer.
-    #  @return Result of the `_register_supporting_sources` operation.
+    #  @param hashes Source-content hashes supplied by the producer
+    #  @return Result of the `_register_supporting_sources` operation
     def _register_supporting_sources(self, hashes):
         if (not isinstance(hashes, dict)
                 or any(not isinstance(path, str) or not os.path.isabs(path)
@@ -197,8 +197,8 @@ class PCResolveAdapter:
     ## Read optional caller facts independently of cached library flow/scan
     ## 读取可选调用方事实，不依赖已缓存的库flow或scan结果
     #
-    #  @param callsite Source location and facts for the original call.
-    #  @return Result of the `caller_inputs` operation.
+    #  @param callsite Source location and facts for the original call
+    #  @return Result of the `caller_inputs` operation
     def caller_inputs(self, callsite):
         try:
             from pcresolve import SourceSpan
@@ -222,10 +222,11 @@ class PCResolveAdapter:
     ## Query whether one source class member keeps its indexed binding
     ## 查询源码类的指定成员是否保持索引时的绑定
     #
-    #  @param module Source module containing the class.
-    #  @param qualname Fully qualified source class name.
-    #  @param member Class member whose binding is queried.
-    #  @return Validated PCResolve binding fact, or None when unsupported.
+    #  @param module Source module containing the class
+    #  @param qualname Fully qualified source class name
+    #  @param member Class member whose binding is queried
+    #  @param file_path Optional source file path used to locate the class member
+    #  @return Validated PCResolve binding fact, or None when unsupported
     def source_class_member_binding(self, module, qualname, member, file_path):
         operation = getattr(self._analyzer, 'source_class_member_binding', None)
         if not callable(operation):
@@ -253,12 +254,12 @@ class PCResolveAdapter:
     ## Query a source method's return expression for one caught exception
     ## 查询源码方法对指定异常的回退返回表达式
     #
-    #  @param module Source module containing the class.
-    #  @param qualname Fully qualified source class name.
-    #  @param member Method whose exception branch is queried.
-    #  @param file_path Exact source file for this class identity.
-    #  @param exception Exception name handled by the method.
-    #  @return Validated PCResolve behavior fact, or None when unsupported.
+    #  @param module Source module containing the class
+    #  @param qualname Fully qualified source class name
+    #  @param member Method whose exception branch is queried
+    #  @param file_path Exact source file for this class identity
+    #  @param exception Exception name handled by the method
+    #  @return Validated PCResolve behavior fact, or None when unsupported
     def source_method_exception_fallback(self, module, qualname, member, file_path,
                                          exception='RuntimeError'):
         operation = getattr(self._analyzer, 'source_method_exception_fallback', None)
@@ -289,9 +290,9 @@ class PCResolveAdapter:
     ## Resolve a versioned source protocol fact for an exact library call
     ## 为精确库调用解析带版本的源码协议事实
     #
-    #  @param function Indexed source function containing the call.
-    #  @param node Exact call node from the indexed source snapshot.
-    #  @return Source protocol fact or None when PCResolve cannot prove it.
+    #  @param function Indexed source function containing the call
+    #  @param node Exact call node from the indexed source snapshot
+    #  @return Source protocol fact or None when PCResolve cannot prove it
     def source_call_protocol(self, function, node):
         try:
             from pcresolve import FunctionRef, SourceSpan
@@ -351,7 +352,7 @@ class PCResolveAdapter:
     ## Validate once per public query, including before a domain cache hit
     ## 每次公开查询都校验源码，包括命中领域缓存前
     #
-    #  @return Result of the `validate_source` operation.
+    #  @return Result of the `validate_source` operation
     def validate_source(self):
 
         # 复用分析事实前同时检查源码集合、文件内容和额外支持源码
@@ -365,8 +366,8 @@ class PCResolveAdapter:
     ## Check PCResolve result fields, schema, scope and source hashes
     ## 校验PCResolve结果字段、模式、作用域及源码哈希
     #
-    #  @param analysis PCResolve analysis result being validated or consumed.
-    #  @return Result of the `_validate` operation.
+    #  @param analysis PCResolve analysis result being validated or consumed
+    #  @return Result of the `_validate` operation
     def _validate(self, analysis):
         missing = [name for name in ("entry", "inputs", "functions", "calls", "boundaries")
                    if not hasattr(analysis, name)]
@@ -409,10 +410,10 @@ class PCResolveAdapter:
     ## Analyze one function and validate the returned PCResolve facts
     ## 分析指定函数并校验返回的PCResolve事实
     #
-    #  @param function Indexed source function under analysis.
-    #  @param max_depth Maximum number of forwarding steps to analyze.
-    #  @param conditional_source_state Whether to request conditional source-state facts.
-    #  @return Result of the `analyze` operation.
+    #  @param function Indexed source function under analysis
+    #  @param max_depth Maximum number of forwarding steps to analyze
+    #  @param conditional_source_state Whether to request conditional source-state facts
+    #  @return Result of the `analyze` operation
     def analyze(self, function, max_depth=1, *, conditional_source_state=False):
         from pcresolve import FunctionRef
 
@@ -442,11 +443,11 @@ class PCResolveAdapter:
     ## Expand one call edge and validate its isolated context when requested
     ## 扩展指定调用边，并在需要时校验隔离上下文
     #
-    #  @param analysis PCResolve analysis result being validated or consumed.
-    #  @param call_id Identifier of the producer call edge.
-    #  @param isolate Value named `isolate` supplied by the enclosing analysis.
-    #  @param preserve_lineage Value named `preserve_lineage` supplied by the enclosing analysis.
-    #  @return Result of the `expand` operation.
+    #  @param analysis PCResolve analysis result being validated or consumed
+    #  @param call_id Identifier of the producer call edge
+    #  @param isolate Value named `isolate` supplied by the enclosing analysis
+    #  @param preserve_lineage Value named `preserve_lineage` supplied by the enclosing analysis
+    #  @return Result of the `expand` operation
     def expand(self, analysis, call_id, *, isolate=False, preserve_lineage=False):
         if type(isolate) is not bool or type(preserve_lineage) is not bool:
             raise ValueError('Expansion isolation options must be bool')

@@ -40,8 +40,8 @@ _OBSERVERS = {
 ## Extract finite string values from a producer fact
 ## 从生产者事实中提取有限字符串值
 #
-#  @param value Value or producer record being interpreted.
-#  @return Result of the `_strings` operation.
+#  @param value Value or producer record being interpreted
+#  @return Result of the `_strings` operation
 def _strings(value):
     return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
 
@@ -49,9 +49,9 @@ def _strings(value):
 ## Validate and convert a producer target into a source identity
 ## 校验并将生产者目标转换为源码身份
 #
-#  @param value Value or producer record being interpreted.
-#  @param hashes Source-content hashes supplied by the producer.
-#  @return Result of the `_identity` operation.
+#  @param value Value or producer record being interpreted
+#  @param hashes Source-content hashes supplied by the producer
+#  @return Result of the `_identity` operation
 def _identity(value, hashes):
     return (
         isinstance(value, dict)
@@ -68,9 +68,9 @@ def _identity(value, hashes):
 ## Validate a source witness against its owner and evidence record
 ## 根据所属对象和证据记录校验源码见证
 #
-#  @param value Value or producer record being interpreted.
-#  @param owner Source identity that owns the queried behavior.
-#  @return Result of the `_witness` operation.
+#  @param value Value or producer record being interpreted
+#  @param owner Source identity that owns the queried behavior
+#  @return Result of the `_witness` operation
 def _witness(value, owner):
     return (
         isinstance(value, dict)
@@ -84,9 +84,9 @@ def _witness(value, owner):
 ## Check whether one source span is contained in another
 ## 检查一个源码范围是否包含于另一个范围
 #
-#  @param inner Value named `inner` supplied by the enclosing analysis.
-#  @param outer Value named `outer` supplied by the enclosing analysis.
-#  @return Result of the `_contained` operation.
+#  @param inner Value named `inner` supplied by the enclosing analysis
+#  @param outer Value named `outer` supplied by the enclosing analysis
+#  @return Result of the `_contained` operation
 def _contained(inner, outer):
     return (
         inner["file_path"] == outer["file_path"]
@@ -98,9 +98,9 @@ def _contained(inner, outer):
 ## Read a supported metadata observer from one producer call
 ## 从生产者调用中读取受支持的元数据观察器
 #
-#  @param call Original client call or its call-specific evidence.
-#  @param hashes Source-content hashes supplied by the producer.
-#  @return Result of the `_observer` operation.
+#  @param call Original client call or its call-specific evidence
+#  @param hashes Source-content hashes supplied by the producer
+#  @return Result of the `_observer` operation
 def _observer(call, hashes):
     guard = call.get("observation_guard")
     if (
@@ -164,10 +164,10 @@ def _observer(call, hashes):
 ## Validate a metadata query and its source-bound target
 ## 校验元数据查询及其源码绑定目标
 #
-#  @param call Original client call or its call-specific evidence.
-#  @param entry Resolved source entry for the requested API.
-#  @param hashes Source-content hashes supplied by the producer.
-#  @return Result of the `_query` operation.
+#  @param call Original client call or its call-specific evidence
+#  @param entry Resolved source entry for the requested API
+#  @param hashes Source-content hashes supplied by the producer
+#  @return Result of the `_query` operation
 def _query(call, entry, hashes):
     query = call.get("query")
     if (
@@ -285,9 +285,9 @@ def _query(call, entry, hashes):
 ## Require each metadata query's conditional input and actual source binding
 ## 逐项核对元数据查询的条件输入及实际源码绑定
 #
-#  @param hook Value named `hook` supplied by the enclosing analysis.
-#  @param supporting_source_hashes Hashes of supporting source files used by producer facts.
-#  @return Result of the `creation_metadata_premises` operation.
+#  @param hook Value named `hook` supplied by the enclosing analysis
+#  @param supporting_source_hashes Hashes of supporting source files used by producer facts
+#  @return Result of the `creation_metadata_premises` operation
 def creation_metadata_premises(hook, supporting_source_hashes=None):
     primary = hook.get('source_hashes')
     supporting = {} if supporting_source_hashes is None else supporting_source_hashes
@@ -451,10 +451,10 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
 ## Read the dynamic signature parameters established by the hook proof
 ## 读取钩子证明所确定的动态签名参数
 #
-#  @param hook Value named `hook` supplied by the enclosing analysis.
-#  @param proof Proof state that receives evidence and boundaries.
-#  @param hashes Source-content hashes supplied by the producer.
-#  @return Result of the `_dynamic_signature_parameters` operation.
+#  @param hook Value named `hook` supplied by the enclosing analysis
+#  @param proof Proof state that receives evidence and boundaries
+#  @param hashes Source-content hashes supplied by the producer
+#  @return Result of the `_dynamic_signature_parameters` operation
 def _dynamic_signature_parameters(hook, proof, hashes):
     dynamic = proof.get('dynamic_parameters')
     if not isinstance(dynamic, (list, tuple)) or not 1 <= len(dynamic) <= 256:
@@ -480,7 +480,19 @@ def _dynamic_signature_parameters(hook, proof, hashes):
                                for segment in signature['dynamic_parameters']
                                if isinstance(segment, dict))
 
+    ## Validate source-bound metadata query evidence
+    ## 校验源码绑定的元数据查询证据
+    #
+    #  @param query Source-bound metadata query
+    #  @param module_call_evidence Optional enclosing module call evidence
+    #  @return Whether the query and its evidence are valid
     def query_is_valid(query, module_call_evidence=None):
+        ## Check source digests against the snapshot and optional parent
+        ## 校验源码摘要与快照及可选父证据的一致性
+        #
+        #  @param record Evidence record containing source digests
+        #  @param parent Optional parent digest mapping
+        #  @return Whether all recorded digests match
         def hashes_match(record, parent=None):
             recorded = record.get('source_hashes') if isinstance(record, dict) else None
             if (not isinstance(recorded, dict) or not recorded
@@ -636,9 +648,10 @@ def _dynamic_signature_parameters(hook, proof, hashes):
 ## Validate signature-construction effects and their source evidence
 ## 校验签名构造效果及其源码证据
 #
-#  @param hook Value named `hook` supplied by the enclosing analysis.
-#  @param complete_source_hashes Hashes for the complete source snapshot.
-#  @return Result of the `_signature_creations` operation.
+#  @param hook Value named `hook` supplied by the enclosing analysis
+#  @param complete_source_hashes Hashes for the complete source snapshot
+#  @param related_callers Related caller identities considered for signature creation
+#  @return Result of the `_signature_creations` operation
 def _signature_creations(hook, complete_source_hashes=None, related_callers=()):
     records = hook.get('signature_creations')
     claim = 'standard_library_inspect_signature_creation'

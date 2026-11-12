@@ -18,8 +18,8 @@ PathLike = Union[str, Path]
 ## Return an encoding that is verified to decode the complete file
 ## 选择能够完整解码源码文件的字符编码
 #
-#  @param file_path Path of the source file.
-#  @return Result of type `str`.
+#  @param file_path Path of the source file
+#  @return Result of type `str`
 def get_encoding(file_path):
     raw_data = Path(file_path).read_bytes()
     candidates = []
@@ -54,7 +54,7 @@ def get_encoding(file_path):
 ## Compatibility alias for the VPPDetector 1.0 public helper
 ## 保留VPPDetector 1.0旧版公开辅助函数的兼容别名
 #
-#  @param filePath Source file path.
-#  @return Result of type `str`.
+#  @param filePath Source file path
+#  @return Result of type `str`
 def getEncoding(filePath):
     return get_encoding(filePath)

@@ -26,7 +26,7 @@ class SourceStructure:
     ## Return the cached nodes from one AST traversal
     ## 返回一次AST遍历缓存的节点
     #
-    #  @return Result of the `walk` operation.
+    #  @return Result of the `walk` operation
     def walk(self):
         if not self._nodes:
 
@@ -38,7 +38,7 @@ class SourceStructure:
     ## Return the parent node for each cached AST child
     ## 返回缓存AST子节点对应的父节点
     #
-    #  @return Result of the `parents` operation.
+    #  @return Result of the `parents` operation
     def parents(self):
         if not self._parents:
             self._parents = {child: parent for parent in self.walk()
@@ -48,8 +48,8 @@ class SourceStructure:
     ## Resolve one method only when its name and source line are unique
     ## 仅在方法名和源码行号唯一时解析该方法
     #
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of the `method` operation.
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of the `method` operation
     def method(self, identity):
         if self._methods is None:
             self._methods = {}
@@ -69,8 +69,8 @@ class SourceQueries:
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @param source_store Content-validating store for parsed source documents.
-    #  @return None.
+    #  @param source_store Content-validating store for parsed source documents
+    #  @return None
     def __init__(self, source_store=None):
         self._versions = {}
         self._source_store = source_store
@@ -78,9 +78,9 @@ class SourceQueries:
     ## Read source under the requested decoding policy and reuse only a matching AST
     ## 按指定解码策略读取源码，并仅复用匹配的AST
     #
-    #  @param path Filesystem path of the source being read or checked.
-    #  @param policy Source decoding and parsing policy.
-    #  @return Result of the `structure` operation.
+    #  @param path Filesystem path of the source being read or checked
+    #  @param policy Source decoding and parsing policy
+    #  @return Result of the `structure` operation
     def structure(self, path, policy):
         key = str(path), policy
         try:
@@ -118,9 +118,9 @@ class SourceQueries:
     ## Resolve one method only when its name and source line are unique
     ## 仅在方法名和源码行号唯一时解析该方法
     #
-    #  @param path Filesystem path of the source being read or checked.
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of the `method` operation.
+    #  @param path Filesystem path of the source being read or checked
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of the `method` operation
     def method(self, path, identity):
         structure = self.structure(path, 'utf-8-sig')
         if structure is None:

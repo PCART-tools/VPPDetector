@@ -15,8 +15,8 @@ from ._program_facts import identity_from_target
 ## Convert source coordinates into a validated source span
 ## 将源码坐标转换为经过校验的源码范围
 #
-#  @param node AST node or source expression being analyzed.
-#  @return Result of the `_span` operation.
+#  @param node AST node or source expression being analyzed
+#  @return Result of the `_span` operation
 def _span(node):
     return (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
 
@@ -24,11 +24,11 @@ def _span(node):
 ## Validate a source fact that a bounded generator manager restores state and rethrows
 ## 校验有界生成器管理器恢复状态并重新抛出的源码事实
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param caller Source identity of the calling function.
-#  @param statement Value named `statement` supplied by the enclosing analysis.
-#  @return Validated manager identity and assumptions, or None when evidence is incomplete.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param caller Source identity of the calling function
+#  @param statement Value named `statement` supplied by the enclosing analysis
+#  @return Validated manager identity and assumptions, or None when evidence is incomplete
 def rethrows_with_body(context, analysis, caller, statement):
     if (not isinstance(statement, ast.With) or len(statement.items) != 1
             or statement.items[0].optional_vars is not None):

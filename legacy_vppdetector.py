@@ -25,24 +25,24 @@ class DefVisitor(ast.NodeVisitor):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None.
+    #  @return None
     def __init__(self):
         self.target = False
 
     ## Set the source line used to locate a candidate definition
     ## 设置用于定位候选定义的源码行号
     #
-    #  @param position Original or selected positional index.
-    #  @return None.
+    #  @param position Original or selected positional index
+    #  @return None
     def setPos(self, position):
         self._position = position
 
     ## Set which variadic channels the candidate must reject
     ## 设置候选定义需要拒绝的可变参数通道
     #
-    #  @param varargFlag Whether positional variadic values are forwarded.
-    #  @param kwargFlag Whether keyword variadic values are forwarded.
-    #  @return None.
+    #  @param varargFlag Whether positional variadic values are forwarded
+    #  @param kwargFlag Whether keyword variadic values are forwarded
+    #  @return None
     def setFlag(self, varargFlag, kwargFlag):
         self._varargFlag = varargFlag
         self._kwargFlag = kwargFlag
@@ -50,8 +50,8 @@ class DefVisitor(ast.NodeVisitor):
     ## Inspect a class node while resolving the requested definition
     ## 检查类节点并解析请求的定义
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return None.
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_ClassDef(self, node):
         if node.lineno == self._position:
             flag1 = False
@@ -81,8 +81,8 @@ class DefVisitor(ast.NodeVisitor):
     ## Inspect a function node while collecting matching API facts
     ## 检查函数节点并收集匹配的API事实
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return None.
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_FunctionDef(self, node):
         if node.lineno == self._position:
             flag1 = False
@@ -113,23 +113,23 @@ class CallVisitor:
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None.
+    #  @return None
     def __init__(self):
         self.callDict = {}
 
     ## Clear the accumulated visitor state before the next query
     ## 在下一次查询前清空访问器累积状态
     #
-    #  @return None.
+    #  @return None
     def clean(self):
         self.callDict.clear()
 
     ## Set the variadic parameter names followed by the visitor
     ## 设置访问器跟踪的可变参数名称
     #
-    #  @param varargName Name of the tracked positional variadic parameter.
-    #  @param kwargName Name of the tracked keyword variadic parameter.
-    #  @return None.
+    #  @param varargName Name of the tracked positional variadic parameter
+    #  @param kwargName Name of the tracked keyword variadic parameter
+    #  @return None
     def setName(self, varargName, kwargName):
         self._varargName = varargName
         self._kwargName = kwargName
@@ -137,8 +137,8 @@ class CallVisitor:
     ## Collect calls that forward the tracked variadic arguments
     ## 收集转发已跟踪可变参数实参的调用
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of the `dfsVisit` operation.
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of the `dfsVisit` operation
     def dfsVisit(self, node):
         if isinstance(node, ast.Call):
             varargFlag = False
@@ -175,7 +175,7 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None.
+    #  @return None
     def __init__(self):
         self.positionLst = []
         self.noFindFlag = False
@@ -183,23 +183,23 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## Clear the accumulated visitor state before the next query
     ## 在下一次查询前清空访问器累积状态
     #
-    #  @return None.
+    #  @return None
     def clean(self):
         self.positionLst.clear()
 
     ## Set the API name used by subsequent source lookups
     ## 设置后续源码查找所用的API名称
     #
-    #  @param name Name to match or validate in the current scope.
-    #  @return None.
+    #  @param name Name to match or validate in the current scope
+    #  @return None
     def setAPIName(self, name):
         self.APIName = name
 
     ## Inspect a class node while resolving the requested definition
     ## 检查类节点并解析请求的定义
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return None.
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_ClassDef(self, node):
         if node.name == self.APIName:
             self.positionLst.append(node.lineno)
@@ -209,8 +209,8 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## Collect matching methods from class definitions in the source tree
     ## 从源码树中的类定义收集匹配方法
     #
-    #  @param root AST root or source root used for lookup.
-    #  @return Result of the `visitClasDef` operation.
+    #  @param root AST root or source root used for lookup
+    #  @return Result of the `visitClasDef` operation
     def visitClasDef(self, root):
         for node in ast.iter_child_nodes(root):
             if isinstance(node, ast.ClassDef):
@@ -229,8 +229,8 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## Collect matching module-level function definitions
     ## 收集匹配的模块级函数定义
     #
-    #  @param root AST root or source root used for lookup.
-    #  @return Result of the `visitFunctionDef` operation.
+    #  @param root AST root or source root used for lookup
+    #  @return Result of the `visitFunctionDef` operation
     def visitFunctionDef(self, root):
         for node in ast.iter_child_nodes(root):
             if isinstance(node, ast.FunctionDef):
@@ -248,8 +248,8 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## Inspect a function node while collecting matching API facts
     ## 检查函数节点并收集匹配的API事实
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return None.
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_FunctionDef(self, node):
         if node.name == self.APIName:
             flag = 1
@@ -268,7 +268,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None.
+    #  @return None
     def __init__(self):
         self.lst = []
         self.defWithVariadicParaLst = []
@@ -284,31 +284,31 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Set the AST root used for source definition lookup
     ## 设置用于源码定义查找的AST根节点
     #
-    #  @param root AST root or source root used for lookup.
-    #  @return None.
+    #  @param root AST root or source root used for lookup
+    #  @return None
     def setRoot(self, root):
         self._root = root
 
     ## Set the module prefix used to qualify discovered APIs
     ## 设置为发现的API添加限定名所用的模块前缀
     #
-    #  @param prefix Value named `prefix` supplied by the enclosing analysis.
-    #  @return None.
+    #  @param prefix Value named `prefix` supplied by the enclosing analysis
+    #  @return None
     def setPrefix(self, prefix):
         self._prefix =  prefix
 
     ## Store the API evolution mapping for this legacy visitor
     ## 保存旧版访问器使用的API演变映射
     #
-    #  @param evolutionDict Legacy API evolution mapping.
-    #  @return None.
+    #  @param evolutionDict Legacy API evolution mapping
+    #  @return None
     def setEvolutionDict(self, evolutionDict):
         self._evolutionDict = evolutionDict
 
     ## Clear the accumulated visitor state before the next query
     ## 在下一次查询前清空访问器累积状态
     #
-    #  @return None.
+    #  @return None
     def clean(self):
         self._callVisitor.clean()
         self._findAPIPosition.clean()
@@ -316,7 +316,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Reset the analysis counters between library versions
     ## 在不同库版本之间重置分析计数
     #
-    #  @return None.
+    #  @return None
     def cleanCnt(self):
         self.cnt1 = 0
         self.cnt2 = 0
@@ -325,10 +325,10 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Find source definitions matching a call name in the selected scope
     ## 在指定作用域中查找与调用名称匹配的源码定义
     #
-    #  @param callName Qualified expression naming the called API.
-    #  @param node AST node or source expression being analyzed.
-    #  @param flag Lookup mode selecting the source scope.
-    #  @return Result of the `findCallDef` operation.
+    #  @param callName Qualified expression naming the called API
+    #  @param node AST node or source expression being analyzed
+    #  @param flag Lookup mode selecting the source scope
+    #  @return Result of the `findCallDef` operation
     def findCallDef(self, callName, node, flag = 0):
         positionLst = []
 
@@ -348,10 +348,10 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Keep definitions that lack a required variadic parameter channel
     ## 筛选缺少所需可变参数通道的定义
     #
-    #  @param positionLst Source positions of candidate definitions.
-    #  @param varargFlag Whether positional variadic values are forwarded.
-    #  @param kwargFlag Whether keyword variadic values are forwarded.
-    #  @return Result of the `findNoKwargCallDef` operation.
+    #  @param positionLst Source positions of candidate definitions
+    #  @param varargFlag Whether positional variadic values are forwarded
+    #  @param kwargFlag Whether keyword variadic values are forwarded
+    #  @return Result of the `findNoKwargCallDef` operation
     def findNoKwargCallDef(self, positionLst, varargFlag, kwargFlag):
         ansLst = []
 
@@ -369,8 +369,8 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Inspect a class node while resolving the requested definition
     ## 检查类节点并解析请求的定义
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return None.
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_ClassDef(self, node):
 
         # 进入一个类定义时，当前类名进栈
@@ -385,8 +385,8 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Inspect a function node while collecting matching API facts
     ## 检查函数节点并收集匹配的API事实
     #
-    #  @param node AST node or source expression being analyzed.
-    #  @return None.
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_FunctionDef(self, node):
 
         # 获取API定义中的参数
@@ -469,8 +469,8 @@ class FunctionDefVisitor(ast.NodeVisitor):
 ## Detect the text encoding of a source file
 ## 检测源码文件的文本编码
 #
-#  @param filePath Source file path.
-#  @return Result of the `getEncoding` operation.
+#  @param filePath Source file path
+#  @return Result of the `getEncoding` operation
 def getEncoding(filePath):
 
     # 读取二进制文件内容
@@ -488,9 +488,9 @@ def getEncoding(filePath):
 ## Build the module prefix for a versioned library source path
 ## 根据带版本的库源码路径生成模块前缀
 #
-#  @param filePath Source file path.
-#  @param libName Configured library name or source-version label.
-#  @return Result of the `getPrefix` operation.
+#  @param filePath Source file path
+#  @param libName Configured library name or source-version label
+#  @return Result of the `getPrefix` operation
 def getPrefix(filePath, libName):
     index=-1
     for i in range(len(libName)):
@@ -510,8 +510,8 @@ def getPrefix(filePath, libName):
 ## Return the numeric version suffix from a library name
 ## 提取库名称中的版本后缀
 #
-#  @param s Value named `s` supplied by the enclosing analysis.
-#  @return Result of the `getVersion` operation.
+#  @param s Value named `s` supplied by the enclosing analysis
+#  @return Result of the `getVersion` operation
 def getVersion(s):
     index = 0
     for i, ch in enumerate(s):
@@ -524,8 +524,8 @@ def getVersion(s):
 ## Scan library versions and record variadic API definitions and forwarding risks
 ## 扫描多个库版本并记录可变参数API定义及转发风险
 #
-#  @param libName Configured library name or source-version label.
-#  @return Result of the `getKwargAPI` operation.
+#  @param libName Configured library name or source-version label
+#  @return Result of the `getKwargAPI` operation
 def getKwargAPI(libName):
     pathObj1 = Path("D")
     pathObj1.getPath(f"/home/zhang/Packages/{libName}")

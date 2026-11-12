@@ -17,10 +17,10 @@ from ._program_facts import identity_from_target
 ## Read one exact reached from-import under the producer's cache conditions
 ## 按生产者缓存条件读取精确到达的导入绑定
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param function Indexed source function under analysis.
-#  @param statement Value named `statement` supplied by the enclosing analysis.
-#  @return Result of the `cached_import_binding` operation.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param function Indexed source function under analysis
+#  @param statement Value named `statement` supplied by the enclosing analysis
+#  @return Result of the `cached_import_binding` operation
 def cached_import_binding(analysis, function, statement):
     if (not isinstance(statement, ast.ImportFrom) or statement.level
             or not statement.module or any(alias.name == '*' for alias in statement.names)):
@@ -72,12 +72,12 @@ def cached_import_binding(analysis, function, statement):
 ## Validate a cached import inside a closed decorator proof, without executing it
 ## 在封闭装饰器证明中验证缓存导入，不执行导入代码
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param function Indexed source function under analysis.
-#  @param fact Producer fact being validated or interpreted.
-#  @param effect Value named `effect` supplied by the enclosing analysis.
-#  @return Result of the `decorator_import_binding` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param function Indexed source function under analysis
+#  @param fact Producer fact being validated or interpreted
+#  @param effect Value named `effect` supplied by the enclosing analysis
+#  @return Result of the `decorator_import_binding` operation
 def decorator_import_binding(context, analysis, function, fact, effect):
     record = effect.get('binding')
     if not isinstance(record, dict):

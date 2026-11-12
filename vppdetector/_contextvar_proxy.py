@@ -22,9 +22,9 @@ _FIELDS = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 ## Read one source module from the indexed dependency snapshot
 ## 从已索引依赖快照中读取一个源码模块
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param module Dotted source module identity.
-#  @return Unique module path and parsed tree, or `(None, None)`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param module Dotted source module identity
+#  @return Unique module path and parsed tree, or `(None, None)`
 def _module_tree(context, module):
     paths = [path for path in context.index.files
              if module_name_for_path(path, context.index.source.import_roots) == module]
@@ -47,9 +47,9 @@ def _module_tree(context, module):
 ## Resolve one unambiguous top-level source assignment
 ## 解析唯一的模块级源码赋值
 #
-#  @param tree Parsed module source.
-#  @param name Module-level name being resolved.
-#  @return Assignment value or `None` when the name is missing or rebound.
+#  @param tree Parsed module source
+#  @param name Module-level name being resolved
+#  @return Assignment value or `None` when the name is missing or rebound
 def _assignment(tree, name):
     matches = []
     for statement in tree.body:
@@ -63,9 +63,9 @@ def _assignment(tree, name):
 ## Locate one direct module assignment and its source range
 ## 定位唯一的模块级赋值及其源码范围
 #
-#  @param tree Parsed module source.
-#  @param name Module-level name being resolved.
-#  @return Unique assignment statement, or `None` when ambiguous.
+#  @param tree Parsed module source
+#  @param name Module-level name being resolved
+#  @return Unique assignment statement, or `None` when ambiguous
 def _assignment_statement(tree, name):
     matches = []
     for statement in tree.body:
@@ -79,8 +79,8 @@ def _assignment_statement(tree, name):
 ## Validate raw source hashes captured by a bounded package scan
 ## 校验有界包扫描时记录的原始源码摘要
 #
-#  @param source_hashes Absolute source paths mapped to SHA-256 digests.
-#  @return True only while every source file still matches its captured digest.
+#  @param source_hashes Absolute source paths mapped to SHA-256 digests
+#  @return True only while every source file still matches its captured digest
 def _raw_source_hashes_match(source_hashes):
     if not isinstance(source_hashes, dict) or not source_hashes:
         return False
@@ -96,9 +96,9 @@ def _raw_source_hashes_match(source_hashes):
 ## Count static module bindings unless dynamic namespace writes are present
 ## 在不存在动态命名空间写入时统计模块级静态绑定数量
 #
-#  @param tree Parsed module source.
-#  @param name Module-level name being checked.
-#  @return Binding count, or `None` when dynamic writes prevent proof.
+#  @param tree Parsed module source
+#  @param name Module-level name being checked
+#  @return Binding count, or `None` when dynamic writes prevent proof
 def _module_binding_count(tree, name):
     bindings = []
     pending = list(tree.body)
@@ -132,14 +132,20 @@ def _module_binding_count(tree, name):
 ## Check whether package initialization can set a context variable
 ## 检查包初始化及其可解析调用链是否会设置ContextVar
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param packages Top-level package names whose initialization is analyzed.
-#  @return True when a reachable `.set` call is found or source is incomplete.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param packages Top-level package names whose initialization is analyzed
+#  @param contextvar_identity Optional module and name identifying the selected ContextVar
+#  @return True when a reachable `.set` call is found or source is incomplete
 def _package_sets_contextvar(context, packages, contextvar_identity=None):
     modules = {}
     source_hashes = {}
 
     # Parse each source file from the exact bytes captured for its proof digest.
+    ## Parse a source module and record its content digest
+    ## 解析源码模块并记录内容摘要
+    #
+    #  @param path Source file path
+    #  @return Parsed source tree or None when reading or parsing fails
     def read_module(path):
         resolved = Path(path).resolve()
         try:
@@ -198,6 +204,13 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
     classes = {}
     imports = {}
 
+    ## Register a module and index its top-level definitions
+    ## 登记模块并索引其顶层定义
+    #
+    #  @param module Qualified source module name
+    #  @param path Source file path
+    #  @param tree Parsed source tree
+    #  @return None
     def add_module(module, path, tree):
         modules[module] = (path, tree)
         imports[module] = _module_imports(context, module, path, tree)
@@ -215,6 +228,11 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
                 if isinstance(item, ast.ClassDef):
                     classes[(module, item.name)] = item
 
+    ## Load a uniquely resolved target module within the scan limit
+    ## 在扫描上限内加载唯一解析的目标模块
+    #
+    #  @param target Qualified target name
+    #  @return Whether the target module was loaded
     def load_target_module(target):
         if not isinstance(target, str):
             return False
@@ -240,6 +258,11 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
             return True
         return False
 
+    ## Check whether a source or extension module is available
+    ## 检查源码模块或扩展模块是否可用
+    #
+    #  @param target Qualified target name
+    #  @return Whether an importable module prefix is present
     def module_is_available(target):
         parts = target.split('.')
         for root in context.index.source.import_roots:
@@ -254,6 +277,12 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
                     return True
         return False
 
+    ## Check whether the call is guarded by an ImportError handler
+    ## 检查调用是否受ImportError处理器保护
+    #
+    #  @param module Qualified source module name
+    #  @param call Call expression being inspected
+    #  @return Whether an enclosing try body catches ImportError
     def import_error_is_caught(module, call):
         source = modules.get(module)
         if source is None:
@@ -276,6 +305,12 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
 
     reached = set()
 
+    ## Resolve an expression to its imported qualified name
+    ## 将表达式解析为导入的限定名
+    #
+    #  @param module Qualified source module name
+    #  @param expression Expression to resolve
+    #  @return Qualified name or None when unresolved
     def imported_target(module, expression):
         if isinstance(expression, ast.Name):
             return imports[module].get(expression.id, module + '.' + expression.id)
@@ -284,9 +319,20 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
             return parent + '.' + expression.attr if isinstance(parent, str) else None
         return None
 
+    ## Find a named definition in the indexed module
+    ## 查找已索引模块中的命名定义
+    #
+    #  @param module Qualified source module name
+    #  @param name Definition name
+    #  @return Definition node or None
     def local_function(module, name):
         return functions.get((module, name))
 
+    ## Resolve a qualified target to a function or constructor
+    ## 将限定目标解析为函数或构造方法
+    #
+    #  @param target Qualified target name
+    #  @return Definition node or None when unresolved
     def function_target(target):
         if not isinstance(target, str):
             return None
@@ -316,6 +362,11 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
             return None
         return None
 
+    ## Resolve a qualified target to an indexed source class
+    ## 将限定目标解析为已索引源码类
+    #
+    #  @param target Qualified target name
+    #  @return Module and class node or None when unresolved
     def class_target(target):
         if not isinstance(target, str):
             return None
@@ -329,6 +380,13 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
                 return module, classes[(module, parts[end])]
         return None
 
+    ## Prove that construction and inherited constructors are inert
+    ## 证明构造及继承的构造方法没有相关效果
+    #
+    #  @param module Qualified source module name
+    #  @param class_node Source class definition
+    #  @param visited Class identities already checked
+    #  @return Whether construction is proven inert
     def constructor_is_inert(module, class_node, visited=None):
         visited = set() if visited is None else visited
         key = (module, class_node.name)
@@ -352,6 +410,11 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
                 return False
         return True
 
+    ## Check whether an expression contains only bounded literal values
+    ## 检查表达式是否仅包含有界字面量
+    #
+    #  @param node Source syntax node
+    #  @return Whether the expression is a supported literal container
     def literal_container(node):
         if isinstance(node, (ast.Constant, ast.NameConstant)):
             return True
@@ -363,6 +426,11 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
                        for key, value in zip(node.keys, node.values))
         return False
 
+    ## Find the longest indexed module prefix of a target
+    ## 查找目标对应的最长已索引模块前缀
+    #
+    #  @param target Qualified target name
+    #  @return Module name or None
     def source_module(target):
         if not isinstance(target, str):
             return None
@@ -373,6 +441,12 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
                 return module
         return None
 
+    ## Check whether an expression references the selected ContextVar
+    ## 检查表达式是否引用所选ContextVar
+    #
+    #  @param module Qualified source module name
+    #  @param node Source syntax node
+    #  @return Whether the selected ContextVar is referenced
     def references_contextvar(module, node):
         if contextvar_identity is None:
             return False
@@ -388,6 +462,12 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
                     return True
         return False
 
+    ## Recognize reads from a known namespace or literal mapping
+    ## 识别对已知命名空间或字面量映射的读取
+    #
+    #  @param module Qualified source module name
+    #  @param call Call expression being inspected
+    #  @return Whether the call reads a recognized mapping
     def reads_known_mapping(module, call):
         if (not isinstance(call.func, ast.Attribute)
                 or call.func.attr not in {'get', 'items', 'keys', 'values'}):
@@ -405,6 +485,14 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
         value = _assignment(source[1], call.func.value.id)
         return isinstance(value, ast.Dict)
 
+    ## Trace reachable initialization expressions for ContextVar mutations
+    ## 追踪可达初始化表达式中的ContextVar修改
+    #
+    #  @param node Source syntax node
+    #  @param module Qualified source module name
+    #  @param execute_definitions Whether definition-time expressions are traversed
+    #  @param contextvar_active Whether the current path refers to the selected ContextVar
+    #  @return Whether a mutation is found or safety cannot be proven
     def scan(node, module, execute_definitions=False, contextvar_active=False):
         pending = [(node, module, execute_definitions, contextvar_active)]
         while pending:
@@ -556,11 +644,11 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
 ## Resolve import aliases from the indexed module syntax
 ## 从已索引模块语法解析导入别名
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param module Dotted source module identity.
-#  @param path Source file for the module.
-#  @param tree Parsed module source.
-#  @return Local names mapped to their canonical imported targets.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param module Dotted source module identity
+#  @param path Source file for the module
+#  @param tree Parsed module source
+#  @return Local names mapped to their canonical imported targets
 def _module_imports(context, module, path, tree):
     result = dict(context.index.imports.get(module, {}))
     from pcresolve.import_facts import resolve_relative_module
@@ -581,12 +669,12 @@ def _module_imports(context, module, path, tree):
 ## Query a source class member through PCResolve
 ## 通过PCResolve查询源码类成员
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param module Source module containing the class.
-#  @param qualname Fully qualified source class name.
-#  @param member Class member whose binding is queried.
-#  @param file_path Exact source file for the class identity.
-#  @return PCResolve binding fact, or `None` when unavailable.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param module Source module containing the class
+#  @param qualname Fully qualified source class name
+#  @param member Class member whose binding is queried
+#  @param file_path Exact source file for the class identity
+#  @return PCResolve binding fact, or `None` when unavailable
 def _source_member_fact(context, module, qualname, member, file_path):
     try:
         return context.adapter.source_class_member_binding(module, qualname, member, file_path)
@@ -597,12 +685,12 @@ def _source_member_fact(context, module, qualname, member, file_path):
 ## Confirm a class member remains bound to its indexed source definition
 ## 确认类成员仍绑定到索引的源码定义
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param module Source module containing the class.
-#  @param qualname Fully qualified source class name.
-#  @param member Class member whose binding is queried.
-#  @param file_path Exact source file for the class identity.
-#  @return Fresh stable-binding fact, or None when the binding is unstable.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param module Source module containing the class
+#  @param qualname Fully qualified source class name
+#  @param member Class member whose binding is queried
+#  @param file_path Exact source file for the class identity
+#  @return Fresh stable-binding fact, or None when the binding is unstable
 def _stable_source_member(context, module, qualname, member, file_path):
     fact = _source_member_fact(context, module, qualname, member, file_path)
     if (isinstance(fact, dict)
@@ -624,8 +712,8 @@ def _stable_source_member(context, module, qualname, member, file_path):
 ## Detect early exits in a method's executable body
 ## 检查方法实际执行体中是否存在提前退出
 #
-#  @param statements Executable statements from one bounded source path.
-#  @return True when a return or raise can bypass a required initialization.
+#  @param statements Executable statements from one bounded source path
+#  @return True when a return or raise can bypass a required initialization
 def _has_execution_exit(statements):
     pending = list(statements)
     while pending:
@@ -642,11 +730,11 @@ def _has_execution_exit(statements):
 ## Prove that a proxy's bool descriptor returns its false fallback when unbound
 ## 证明代理对象未绑定时的bool描述符会返回false回退值
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param proxy_module Module containing the imported proxy class.
-#  @param proxy_class Proxy class identity.
-#  @param proxy_tree Parsed source for the proxy class module.
-#  @return Source facts only for the validated false-fallback protocol.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param proxy_module Module containing the imported proxy class
+#  @param proxy_class Proxy class identity
+#  @param proxy_tree Parsed source for the proxy class module
+#  @return Source facts only for the validated false-fallback protocol
 def _proxy_bool_is_unbound_false(context, proxy_module, proxy_class, proxy_tree):
     proxy_path, proxy_tree = _module_tree(context, proxy_module)
     if proxy_path is None or proxy_tree is None:
@@ -831,11 +919,11 @@ def _proxy_bool_is_unbound_false(context, proxy_module, proxy_class, proxy_tree)
 ## Find false conditions for unbound ContextVar proxies at a caller callsite
 ## 查找调用点处未绑定ContextVar代理对象对应的false条件
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param call Original call or its call-specific evidence.
-#  @param node Exact parsed client call.
-#  @param entry Resolved source entry for the requested API.
-#  @return Condition spans proven false, or an empty mapping.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param call Original call or its call-specific evidence
+#  @param node Exact parsed client call
+#  @param entry Resolved source entry for the requested API
+#  @return Condition spans proven false, or an empty mapping
 def caller_contextvar_conditions(context, call, node, entry):
     if call.callsite is None:
         return {}

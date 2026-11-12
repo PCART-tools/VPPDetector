@@ -19,12 +19,12 @@ from .models import FunctionIdentity, SourceSpan
 ## Require an original captured element actually binding a fixed formal at a source call
 ## 证明原始捕获元素在源码调用处实际绑定到固定形参
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param call Original client call or its call-specific evidence.
-#  @param change Description of the removed or renamed parameter.
-#  @param original Value named `original` supplied by the enclosing analysis.
-#  @return Result of the `fixed_binding` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param call Original client call or its call-specific evidence
+#  @param change Description of the removed or renamed parameter
+#  @param original Value named `original` supplied by the enclosing analysis
+#  @return Result of the `fixed_binding` operation
 def fixed_binding(context, entry, call, change, original):
     if len(call.observed_fixed_bindings) != 1:
         return None

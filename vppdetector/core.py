@@ -48,8 +48,8 @@ from .source import IndexedFunction
 ## Classify an argument as positional or keyword expansion
 ## 判定实参属于位置展开还是关键字展开
 #
-#  @param argument Input value of type `dict`.
-#  @return Result of type `Optional[VariadicKind]`.
+#  @param argument Input value of type `dict`
+#  @return Result of type `Optional[VariadicKind]`
 def _expansion_kind(argument):
     if argument.get("starred"):
         return VariadicKind.POSITIONAL
@@ -61,8 +61,8 @@ def _expansion_kind(argument):
 ## Require an open container, not a selected element or dict key
 ## 要求证据指向开放容器，而非选中元素或字典键
 #
-#  @param flow Producer data-flow record being checked.
-#  @return Result of type `bool`.
+#  @param flow Producer data-flow record being checked
+#  @return Result of type `bool`
 def _whole_container(flow):
     if flow.get("object_only") or flow.get("container_object"):
         return False
@@ -93,10 +93,10 @@ class _State:
 ## Follow open variadic containers to fixed expansion signatures
 ## 沿开放可变参数容器追踪到固定参数展开签名
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param max_depth Maximum number of forwarding steps to analyze.
-#  @return Findings, analysis boundaries and the PCResolve schema version.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param max_depth Maximum number of forwarding steps to analyze
+#  @return Findings, analysis boundaries and the PCResolve schema version
 def scan_function(
     context, entry, max_depth=5
 ):
@@ -482,10 +482,10 @@ def scan_function(
 ## Build an analysis boundary attached to a root variadic parameter
 ## 构建关联到根可变参数的分析边界
 #
-#  @param boundary Input value of type `AnalysisBoundary`.
-#  @param entry Resolved source entry for the requested API.
-#  @param state Current abstract or analysis state.
-#  @return Result of type `AnalysisBoundary`.
+#  @param boundary Input value of type `AnalysisBoundary`
+#  @param entry Resolved source entry for the requested API
+#  @param state Current abstract or analysis state
+#  @return Result of type `AnalysisBoundary`
 def _root_boundary(
     boundary, entry, state
 ):
@@ -498,9 +498,9 @@ def _root_boundary(
 ## A recorded dependency, without asserting an open container shape
 ## 读取参数依赖，但不据此断言容器形状开放
 #
-#  @param value Value or producer record being interpreted.
-#  @param parameter Parameter name or parameter fact being checked.
-#  @return Result of type `bool`.
+#  @param value Value or producer record being interpreted
+#  @param parameter Parameter name or parameter fact being checked
+#  @return Result of type `bool`
 def _parameter_dependency(value, parameter):
     return bool(
         value.get("kind") in {"parameter", "capture"}
@@ -512,9 +512,9 @@ def _parameter_dependency(value, parameter):
 ## Check whether a call consumes the selected variadic parameter
 ## 检查调用是否消费选定的可变参数
 #
-#  @param call Original client call or its call-specific evidence.
-#  @param parameter Parameter name or parameter fact being checked.
-#  @return Result of type `bool`.
+#  @param call Original client call or its call-specific evidence
+#  @param parameter Parameter name or parameter fact being checked
+#  @return Result of type `bool`
 def _call_depends_on_parameter(call, parameter):
     values = [*call.receiver_sources, *call.argument_flows]
     values.extend(value for item in call.argument_sources for value in item.get("sources", ()))
@@ -528,10 +528,10 @@ def _call_depends_on_parameter(call, parameter):
 ## Use shared scope facts only to diagnose a known local callable
 ## 仅用共享作用域事实诊断已知的局部可调用对象
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param state Current abstract or analysis state.
-#  @param target Producer target record or selected source target.
-#  @return Result of type `bool`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param state Current abstract or analysis state
+#  @param target Producer target record or selected source target
+#  @return Result of type `bool`
 def _lexical_capture(
     context, state, target
 ):
@@ -547,10 +547,10 @@ def _lexical_capture(
 ## Check whether a call captures the selected parameter in a local function
 ## 检查局部函数调用是否捕获选定参数
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param state Current abstract or analysis state.
-#  @param call Original client call or its call-specific evidence.
-#  @return Result of type `bool`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param state Current abstract or analysis state
+#  @param call Original client call or its call-specific evidence
+#  @return Result of type `bool`
 def _call_captures_parameter(context, state, call):
     if any(
         _parameter_dependency(value, state.parameter)
@@ -571,11 +571,11 @@ def _call_captures_parameter(context, state, call):
 ## Use only exact call-time open captures of an immediately invoked local function
 ## 仅沿立即调用的局部函数读取精确的调用时开放捕获
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param state Current abstract or analysis state.
-#  @param call Original client call or its call-specific evidence.
-#  @return Result of type `list`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param state Current abstract or analysis state
+#  @param call Original client call or its call-specific evidence
+#  @return Result of type `list`
 def _capture_flows(context, analysis, state, call):
     if (call.target is None or _target_status(analysis, call) != "resolved"
             or call.analysis_status != "analyzed" or call.binding_status != "complete"
@@ -630,10 +630,10 @@ def _capture_flows(context, analysis, state, call):
 ## Record boundaries for deferred uses of captured variadic values
 ## 记录被捕获可变参数延迟使用所产生的边界
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param state Current abstract or analysis state.
-#  @return Result of type `Iterable[AnalysisBoundary]`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param state Current abstract or analysis state
+#  @return Result of type `Iterable[AnalysisBoundary]`
 def _deferred_capture_boundaries(
     context, analysis, state
 ):
@@ -668,9 +668,9 @@ def _deferred_capture_boundaries(
 ## A source owner's contexts, not a proof that unknown contexts are absent
 ## 读取源码所有者的接收者上下文，但不证明未知上下文不存在
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param identity Source-level identity used for lookup.
-#  @return Result of type `tuple`.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param identity Source-level identity used for lookup
+#  @return Result of type `tuple`
 def _receiver_contexts(analysis, identity):
     return tuple(
         identity_from_target(receiver)
@@ -683,11 +683,11 @@ def _receiver_contexts(analysis, identity):
 ## Retain source callable/class facts on unique helper edges
 ## 仅在唯一辅助调用边上保留源码可调用对象和类事实
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param call Original client call or its call-specific evidence.
-#  @param definition Input value of type `IndexedFunction`.
-#  @return Result of type `Any`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param call Original client call or its call-specific evidence
+#  @param definition Input value of type `IndexedFunction`
+#  @return Result of type `Any`
 def _expand_body(
     context, analysis, call, definition
 ):
@@ -850,8 +850,8 @@ def _expand_body(
 ## Return the positional and keyword parameter names of a function
 ## 返回函数的位置参数和关键字参数名称
 #
-#  @param function Indexed source function under analysis.
-#  @return Result of type `tuple`.
+#  @param function Indexed source function under analysis
+#  @return Result of type `tuple`
 def _parameters(function):
     signature = function.signature
     return tuple(
@@ -870,9 +870,9 @@ def _parameters(function):
 ## Do not confuse a comprehension dependency with an open parameter space
 ## 避免把推导式依赖误判为开放参数空间
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param flow Producer data-flow record being checked.
-#  @return Result of type `bool`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param flow Producer data-flow record being checked
+#  @return Result of type `bool`
 def _open_container(context, flow):
     if not _whole_container(flow):
         return False
@@ -897,10 +897,10 @@ def _open_container(context, flow):
 ## Use input dependencies only to select relevant return queries, not to prove shape
 ## 仅用输入依赖筛选返回查询，不据此证明容器形状
 #
-#  @param values Abstract values propagated through the analysis.
-#  @param parameter Parameter name or parameter fact being checked.
-#  @param calls Input value of type `dict`.
-#  @return Result of type `bool`.
+#  @param values Abstract values propagated through the analysis
+#  @param parameter Parameter name or parameter fact being checked
+#  @param calls Input value of type `dict`
+#  @return Result of type `bool`
 def _depends_on_parameter(values, parameter, calls):
     pending, seen = list(values), set()
     while pending:
@@ -921,9 +921,9 @@ def _depends_on_parameter(values, parameter, calls):
 ## Keep exact tuple slots until the router proves the selected open shape
 ## 保留精确tuple槽位，直到路由器证明开放形状
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param value Value or producer record being interpreted.
-#  @return Result of type `bool`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param value Value or producer record being interpreted
+#  @return Result of type `bool`
 def _routable_return(context, value):
     if value.get("object_only") or value.get("container_object"):
         return False
@@ -980,13 +980,13 @@ def _routable_return(context, value):
 ## Compose source-resolved whole-container returns using PCResolve's router
 ## 通过PCResolve路由器组合源码解析的整容器返回路径
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param state Current abstract or analysis state.
-#  @param destination Input value of type `Any`.
-#  @param budget Maximum amount of literal or container state to model.
-#  @param boundaries Input value of type `list`.
-#  @return Result of type `list[dict]`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param state Current abstract or analysis state
+#  @param destination Input value of type `Any`
+#  @param budget Maximum amount of literal or container state to model
+#  @param boundaries Input value of type `list`
+#  @return Result of type `list[dict]`
 def _returned_flows(
     context,
     analysis,
@@ -1017,10 +1017,10 @@ def _returned_flows(
     ## Build an analysis boundary for an unsupported return-flow path
     ## 为不受支持的返回流路径构建分析边界
     #
-    #  @param code Value named `code` supplied by the enclosing analysis.
-    #  @param message Value named `message` supplied by the enclosing analysis.
-    #  @param call Original client call or its call-specific evidence.
-    #  @return Result of the `boundary` operation.
+    #  @param code Value named `code` supplied by the enclosing analysis
+    #  @param message Value named `message` supplied by the enclosing analysis
+    #  @param call Original client call or its call-specific evidence
+    #  @return Result of the `boundary` operation
     def boundary(code, message, call):
         boundaries.append(
             AnalysisBoundary(code, message, identity_from_target(call.caller), call_span(call))
@@ -1029,13 +1029,13 @@ def _returned_flows(
     ## Collect returned values only when their source and control-flow evidence is safe
     ## 仅在来源及控制流证据可靠时收集返回值
     #
-    #  @param values Abstract values propagated through the analysis.
-    #  @param owner Source identity that owns the queried behavior.
-    #  @param owner_analysis Value named `owner_analysis` supplied by the enclosing analysis.
-    #  @param endpoint Value named `endpoint` supplied by the enclosing analysis.
-    #  @param remaining Forwarding depth left for the analysis.
-    #  @param captured Value named `captured` supplied by the enclosing analysis.
-    #  @return Result of the `safe_values` operation.
+    #  @param values Abstract values propagated through the analysis
+    #  @param owner Source identity that owns the queried behavior
+    #  @param owner_analysis Value named `owner_analysis` supplied by the enclosing analysis
+    #  @param endpoint Value named `endpoint` supplied by the enclosing analysis
+    #  @param remaining Forwarding depth left for the analysis
+    #  @param captured Value named `captured` supplied by the enclosing analysis
+    #  @return Result of the `safe_values` operation
     def safe_values(values, owner, owner_analysis, endpoint, remaining, captured=()):
         values = list(values)
 
@@ -1162,12 +1162,12 @@ def _returned_flows(
     ## Collect bounded return-flow candidates for the current forwarding path
     ## 收集当前转发路径中的有界返回流候选
     #
-    #  @param values Abstract values propagated through the analysis.
-    #  @param owner Source identity that owns the queried behavior.
-    #  @param owner_analysis Value named `owner_analysis` supplied by the enclosing analysis.
-    #  @param remaining Forwarding depth left for the analysis.
-    #  @param stack Value named `stack` supplied by the enclosing analysis.
-    #  @return Result of the `collect` operation.
+    #  @param values Abstract values propagated through the analysis
+    #  @param owner Source identity that owns the queried behavior
+    #  @param owner_analysis Value named `owner_analysis` supplied by the enclosing analysis
+    #  @param remaining Forwarding depth left for the analysis
+    #  @param stack Value named `stack` supplied by the enclosing analysis
+    #  @return Result of the `collect` operation
     def collect(values, owner, owner_analysis, remaining, stack):
         owner_calls = {call.id: call for call in direct_calls(owner_analysis, owner.identity)}
         for value in values:
@@ -1268,12 +1268,12 @@ def _returned_flows(
     ## Use identity only for the path; never recover its old input contents
     ## 只用对象身份确定路径，不恢复该对象的旧输入内容
     #
-    #  @param value Value or producer record being interpreted.
-    #  @param owner Source identity that owns the queried behavior.
-    #  @param owner_analysis Value named `owner_analysis` supplied by the enclosing analysis.
-    #  @param remaining Forwarding depth left for the analysis.
-    #  @param stack Value named `stack` supplied by the enclosing analysis.
-    #  @return Result of the `object_context` operation.
+    #  @param value Value or producer record being interpreted
+    #  @param owner Source identity that owns the queried behavior
+    #  @param owner_analysis Value named `owner_analysis` supplied by the enclosing analysis
+    #  @param remaining Forwarding depth left for the analysis
+    #  @param stack Value named `stack` supplied by the enclosing analysis
+    #  @return Result of the `object_context` operation
     def object_context(value, owner, owner_analysis, remaining, stack=()):
         producer = next(
             (
@@ -1408,9 +1408,9 @@ def _returned_flows(
 ## Resolve a call target to one indexed source definition
 ## 将调用目标解析为唯一索引源码定义
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param target Producer target record or selected source target.
-#  @return Result of type `Optional[IndexedFunction]`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param target Producer target record or selected source target
+#  @return Result of type `Optional[IndexedFunction]`
 def _target_definition(
     context, target
 ):
@@ -1424,10 +1424,10 @@ def _target_definition(
 ## Flatten only PCResolve's exact expansion-to-capture wildcard binding
 ## 仅展开PCResolve精确记录的展开到捕获通配符绑定
 #
-#  @param item Input value of type `dict`.
-#  @param function Indexed source function under analysis.
-#  @param root_kind Variadic channel kind at the root API.
-#  @return Result of type `tuple`.
+#  @param item Input value of type `dict`
+#  @param function Indexed source function under analysis
+#  @param root_kind Variadic channel kind at the root API
+#  @return Result of type `tuple`
 def _return_binding_path(item, function, root_kind):
     path = tuple(item.get("target_path", ()))
     argument = item.get("argument")
@@ -1449,9 +1449,9 @@ def _return_binding_path(item, function, root_kind):
 ## Flatten only a capture's element wildcard, retaining exact tuple slots
 ## 仅展开捕获参数的元素通配符，同时保留精确tuple槽位
 #
-#  @param value Value or producer record being interpreted.
-#  @param function Indexed source function under analysis.
-#  @return Result of type `dict`.
+#  @param value Value or producer record being interpreted
+#  @param function Indexed source function under analysis
+#  @return Result of type `dict`
 def _capture_return_value(value, function):
     path = value.get("output_path", ())
     if (
@@ -1468,11 +1468,11 @@ def _capture_return_value(value, function):
 ## Unknown effects on a returned alias must not restore open contents
 ## 确保返回别名上的未知副作用不会重新开放容器内容
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param owner Source identity that owns the queried behavior.
-#  @param value Value or producer record being interpreted.
-#  @param destination Input value of type `Any`.
-#  @return Result of type `Optional[SourceSpan]`.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param owner Source identity that owns the queried behavior
+#  @param value Value or producer record being interpreted
+#  @param destination Input value of type `Any`
+#  @return Result of type `Optional[SourceSpan]`
 def _return_operation_boundary(
     analysis, owner, value, destination
 ):
@@ -1536,8 +1536,8 @@ def _return_operation_boundary(
 ## Recognize a complete identity fact, not an element dependency
 ## 识别完整对象身份事实，不将元素依赖当作对象别名
 #
-#  @param value Value or producer record being interpreted.
-#  @return Result of type `bool`.
+#  @param value Value or producer record being interpreted
+#  @return Result of type `bool`
 def _proven_object_alias(value):
     obj = value.get("container_object", {})
     return bool(
@@ -1558,9 +1558,9 @@ def _proven_object_alias(value):
 ## Recognize complete bounded effects, not purity from a helper's spelling
 ## 识别完整且有界的映射修改效果，不凭辅助函数名称推断纯度
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param call Original client call or its call-specific evidence.
-#  @return Result of type `bool`.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param call Original client call or its call-specific evidence
+#  @return Result of type `bool`
 def _modeled_mapping_removal(analysis, call):
     if (
         not call.target
@@ -1597,11 +1597,11 @@ def _modeled_mapping_removal(analysis, call):
 ## Do not assume a helper's generic formal survives unknown receiver effects
 ## 避免在接收者副作用未知时假设通用形参保持不变
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param identity Source-level identity used for lookup.
-#  @param parameter Parameter name or parameter fact being checked.
-#  @param destination Input value of type `Any`.
-#  @return Result of type `Optional[SourceSpan]`.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param identity Source-level identity used for lookup
+#  @param parameter Parameter name or parameter fact being checked
+#  @param destination Input value of type `Any`
+#  @return Result of type `Optional[SourceSpan]`
 def _carrier_operation_boundary(
     analysis, identity, parameter, destination
 ):
@@ -1627,9 +1627,9 @@ def _carrier_operation_boundary(
 ## Callable identity does not prove an effect-uncertain body is unchanged
 ## 避免仅凭可调用对象身份认定函数体无不确定副作用
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param call Original client call or its call-specific evidence.
-#  @return Result of type `tuple[AnalysisBoundary, ...]`.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param call Original client call or its call-specific evidence
+#  @return Result of type `tuple[AnalysisBoundary, ...]`
 def _callee_body_boundaries(analysis, call):
     reason = "identity_decorator_effects_unmodeled"
     if not any(
@@ -1654,11 +1654,11 @@ def _callee_body_boundaries(analysis, call):
 ## Collect scope and flow limits relevant to one scan channel
 ## 收集与单个扫描通道相关的作用域及数据流限制
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param identity Source-level identity used for lookup.
-#  @param relevant_calls Input value of type `set`.
-#  @param parameter Parameter name or parameter fact being checked.
-#  @return Result of type `Iterable[AnalysisBoundary]`.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param identity Source-level identity used for lookup
+#  @param relevant_calls Input value of type `set`
+#  @param parameter Parameter name or parameter fact being checked
+#  @return Result of type `Iterable[AnalysisBoundary]`
 def _analysis_boundaries(
     analysis, identity, relevant_calls, parameter
 ):

@@ -29,8 +29,8 @@ _ASSUMPTIONS = {
 ## Check whether a source helper has a normal path without an explicit raise
 ## 检查源码辅助函数是否存在不含显式抛出的正常路径
 #
-#  @param statements Statements in a source function body.
-#  @return Result of the `normal_completion` check.
+#  @param statements Statements in a source function body
+#  @return Result of the `normal_completion` check
 def _normal_completion(statements):
     for statement in statements:
         if isinstance(statement, ast.Raise):
@@ -46,10 +46,10 @@ def _normal_completion(statements):
 ## Validate a source guard helper before following the wrapped call
 ## 跟随包装调用前校验源码保护分支的辅助函数
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param factory_identity Source identity of the wrapper factory.
-#  @param guard Guard statement executed before forwarding.
-#  @return Result of the `guard_helper` validation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param factory_identity Source identity of the wrapper factory
+#  @param guard Guard statement executed before forwarding
+#  @return Result of the `guard_helper` validation
 def _guard_helper_can_complete(context, factory_identity, guard):
     if (not isinstance(guard, ast.If) or len(guard.body) != 1
             or not isinstance(guard.body[0], ast.Expr)
@@ -68,11 +68,11 @@ def _guard_helper_can_complete(context, factory_identity, guard):
 ## Return a forwarding fact only for its supported actual positional count
 ## 仅在实际位置参数数量符合支持条件时返回转发事实
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param function Indexed source function under analysis.
-#  @param positional_count Number of positional arguments supplied.
-#  @return Result of the `binding` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param function Indexed source function under analysis
+#  @param positional_count Number of positional arguments supplied
+#  @return Result of the `binding` operation
 def binding(context, analysis, function, positional_count):
     if type(positional_count) is not int or positional_count < 0:
         return None
@@ -140,10 +140,10 @@ def binding(context, analysis, function, positional_count):
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param value Value or producer record being interpreted.
-    #  @param identity Source-level identity used for lookup.
-    #  @param node AST node or source expression being analyzed.
-    #  @return Result of the `witness` operation.
+    #  @param value Value or producer record being interpreted
+    #  @param identity Source-level identity used for lookup
+    #  @param node AST node or source expression being analyzed
+    #  @return Result of the `witness` operation
     def witness(value, identity, node):
         return (
             isinstance(value, dict)

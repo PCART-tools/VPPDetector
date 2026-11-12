@@ -19,7 +19,7 @@ class StringEnum(str, Enum):
     ## Return the enum value used at report and CLI boundaries
     ## 返回报告和命令行边界使用的枚举值
     #
-    #  @return Result of type `str`.
+    #  @return Result of type `str`
     def __str__(self):
         return self.value
 
@@ -68,7 +68,7 @@ class ParameterChange:
     ## Validate and normalize the immutable call-context fields
     ## 校验并规范化不可变调用上下文字段
     #
-    #  @return Result of type `None`.
+    #  @return Result of type `None`
     def __post_init__(self):
         object.__setattr__(self, "kind", ChangeKind(self.kind))
         if not self.old_name.isidentifier():
@@ -299,7 +299,7 @@ class CallContext:
     ## Validate and normalize the immutable call-context fields
     ## 校验并规范化不可变调用上下文字段
     #
-    #  @return Result of type `None`.
+    #  @return Result of type `None`
     def __post_init__(self):
         if self.execution_directory is not None:
             try:
@@ -455,7 +455,7 @@ class ScanReport:
     ## Whether this scan found a VPP; false does not prove full coverage
     ## 判断扫描是否发现VPP；False不代表分析覆盖完整
     #
-    #  @return Result of type `bool`.
+    #  @return Result of type `bool`
     @property
     def has_vpp(self):
         return bool(self.findings)
@@ -463,7 +463,7 @@ class ScanReport:
     ## Compatibility alias for the positive findings collection
     ## 提供兼容旧调用方的潜在问题只读别名
     #
-    #  @return Result of type `Tuple[ForwardingFinding, ...]`.
+    #  @return Result of type `Tuple[ForwardingFinding, ...]`
     @property
     def potential_pitfalls(self):
         return self.findings

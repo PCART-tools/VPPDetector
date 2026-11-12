@@ -19,12 +19,12 @@ from .models import FunctionIdentity, SourceSpan
 ## Validate one call-specific observation and its conditional source transfer
 ## 验证一次特定调用的运行观测及其条件性源码转移
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param call Original client call or its call-specific evidence.
-#  @param change Description of the removed or renamed parameter.
-#  @param original Value named `original` supplied by the enclosing analysis.
-#  @return Result of the `mapping_return` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param call Original client call or its call-specific evidence
+#  @param change Description of the removed or renamed parameter
+#  @param original Value named `original` supplied by the enclosing analysis
+#  @return Result of the `mapping_return` operation
 def mapping_return(context, entry, call, change, original):
     if len(call.observed_normal_returns) != 1:
         return None

@@ -15,10 +15,10 @@ from ._program_facts import identity_from_target, source_constructor_entry_bindi
 ## Find the source method node, reusing a compatible syntax query when available
 ## 查找源码方法节点，并在可用时复用兼容的语法查询
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @param identity Source-level identity used for lookup.
-#  @param source_queries Value named `source_queries` supplied by the enclosing analysis.
-#  @return Result of the `_method_node` operation.
+#  @param path Filesystem path of the source being read or checked
+#  @param identity Source-level identity used for lookup
+#  @param source_queries Value named `source_queries` supplied by the enclosing analysis
+#  @return Result of the `_method_node` operation
 def _method_node(path, identity, source_queries=None):
     if source_queries is not None:
         return source_queries.method(path, identity)
@@ -37,10 +37,10 @@ def _method_node(path, identity, source_queries=None):
 ## Build the attribute path rooted at the selected receiver
 ## 构建以选定接收者为根的属性路径
 #
-#  @param node AST node or source expression being analyzed.
-#  @param receiver Receiver object for the source method call.
-#  @param attribute Attribute name being resolved.
-#  @return Result of the `_attribute_path` operation.
+#  @param node AST node or source expression being analyzed
+#  @param receiver Receiver object for the source method call
+#  @param attribute Attribute name being resolved
+#  @return Result of the `_attribute_path` operation
 def _attribute_path(node, receiver, attribute):
     return (isinstance(node, ast.Attribute) and node.attr == attribute
             and isinstance(node.value, ast.Name) and node.value.id == receiver)
@@ -49,13 +49,13 @@ def _attribute_path(node, receiver, attribute):
 ## Reject a retention claim if checked source methods can invalidate its field
 ## 若已检查源码方法可修改字段，则拒绝属性保留结论
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param checked Value named `checked` supplied by the enclosing analysis.
-#  @param receiver Receiver object for the source method call.
-#  @param attribute Attribute name being resolved.
-#  @param store_line Value named `store_line` supplied by the enclosing analysis.
-#  @param source_queries Value named `source_queries` supplied by the enclosing analysis.
-#  @return Result of the `_later_mutation_is_possible` operation.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param checked Value named `checked` supplied by the enclosing analysis
+#  @param receiver Receiver object for the source method call
+#  @param attribute Attribute name being resolved
+#  @param store_line Value named `store_line` supplied by the enclosing analysis
+#  @param source_queries Value named `source_queries` supplied by the enclosing analysis
+#  @return Result of the `_later_mutation_is_possible` operation
 def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_line,
                                 source_queries=None):
     for target in checked:
@@ -91,13 +91,13 @@ def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_li
 ## Match a scalar or unchanged keyword-capture store to a source witness
 ## 将标量或未变更的关键字捕获存储匹配到源码见证
 #
-#  @param analysis PCResolve analysis result being validated or consumed.
-#  @param function Indexed source function under analysis.
-#  @param statement Value named `statement` supplied by the enclosing analysis.
-#  @param destination Value named `destination` supplied by the enclosing analysis.
-#  @param mapping_capture Value named `mapping_capture` supplied by the enclosing analysis.
-#  @param source_queries Value named `source_queries` supplied by the enclosing analysis.
-#  @return Result of the `retained_store` operation.
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param function Indexed source function under analysis
+#  @param statement Value named `statement` supplied by the enclosing analysis
+#  @param destination Value named `destination` supplied by the enclosing analysis
+#  @param mapping_capture Value named `mapping_capture` supplied by the enclosing analysis
+#  @param source_queries Value named `source_queries` supplied by the enclosing analysis
+#  @return Result of the `retained_store` operation
 def retained_store(analysis, function, statement, destination, mapping_capture=None,
                    source_queries=None):
     if function.query_class is None or not isinstance(destination, ast.Attribute):

@@ -19,12 +19,12 @@ from .models import FunctionIdentity, SourceSpan
 ## Require actual construction, original-capture retention and a matching source store
 ## 确认实际构造、原始捕获值保留及源码存储见证一致
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param call Original client call or its call-specific evidence.
-#  @param change Description of the removed or renamed parameter.
-#  @param original Value named `original` supplied by the enclosing analysis.
-#  @return Result of the `attribute_retention` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param call Original client call or its call-specific evidence
+#  @param change Description of the removed or renamed parameter
+#  @param original Value named `original` supplied by the enclosing analysis
+#  @return Result of the `attribute_retention` operation
 def attribute_retention(context, entry, call, change, original):
     if len(call.observed_attribute_retentions) != 1:
         return None

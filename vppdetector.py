@@ -19,8 +19,8 @@ from vppdetector import ScanReport, scan_package
 ## Convert report values into JSON-serializable data
 ## 将报告值转换为可序列化的JSON数据
 #
-#  @param value Value or producer record being interpreted.
-#  @return Result of type `Any`.
+#  @param value Value or producer record being interpreted
+#  @return Result of type `Any`
 def _to_data(value):
     if is_dataclass(value):
         data = {field.name: _to_data(getattr(value, field.name)) for field in fields(value)}

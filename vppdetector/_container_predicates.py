@@ -20,8 +20,8 @@ from .models import FunctionIdentity, SourceSpan
 ## Read the supported callable descriptor from a source node
 ## 从源码节点读取受支持的可调用描述符
 #
-#  @param node AST node or source expression being analyzed.
-#  @return Result of the `_descriptor` operation.
+#  @param node AST node or source expression being analyzed
+#  @return Result of the `_descriptor` operation
 def _descriptor(node):
     negated = False
     while isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -54,11 +54,11 @@ def _descriptor(node):
 ## Require call scope, original-element provenance, completion and source agreement
 ## 核对调用范围、原始元素来源、执行完成及源码证据
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param call Original client call or its call-specific evidence.
-#  @param change Description of the removed or renamed parameter.
-#  @return Result of the `container_predicate` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param call Original client call or its call-specific evidence
+#  @param change Description of the removed or renamed parameter
+#  @return Result of the `container_predicate` operation
 def container_predicate(context, entry, call, change):
     if len(call.observed_container_predicates) != 1:
         return None

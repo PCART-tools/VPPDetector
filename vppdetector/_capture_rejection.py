@@ -19,9 +19,9 @@ from .models import FunctionIdentity, SourceSpan
 ## Convert source coordinates into a validated source span
 ## 将源码坐标转换为经过校验的源码范围
 #
-#  @param path Filesystem path of the source being read or checked.
-#  @param node AST node or source expression being analyzed.
-#  @return Result of the `_span` operation.
+#  @param path Filesystem path of the source being read or checked
+#  @param node AST node or source expression being analyzed
+#  @return Result of the `_span` operation
 def _span(path, node):
     return dict(file_path=str(path), lineno=node.lineno, col_offset=node.col_offset,
                 end_lineno=node.end_lineno, end_col_offset=node.end_col_offset)
@@ -30,12 +30,12 @@ def _span(path, node):
 ## Require a reached guard, original-key provenance and the actual escaping exception
 ## 验证守卫已执行、原始键来源及异常实际向外传播
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entry Resolved source entry for the requested API.
-#  @param call Original client call or its call-specific evidence.
-#  @param change Description of the removed or renamed parameter.
-#  @param original Value named `original` supplied by the enclosing analysis.
-#  @return Result of the `capture_rejection` operation.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param call Original client call or its call-specific evidence
+#  @param change Description of the removed or renamed parameter
+#  @param original Value named `original` supplied by the enclosing analysis
+#  @return Result of the `capture_rejection` operation
 def capture_rejection(context, entry, call, change, original):
     if len(call.observed_capture_rejections) != 1:
         return None

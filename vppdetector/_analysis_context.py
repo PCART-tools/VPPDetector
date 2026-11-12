@@ -43,8 +43,8 @@ class AnalysisContext:
     ## Build a reusable analysis context from a source context
     ## 根据源码上下文构建可复用的分析上下文
     #
-    #  @param source Library source directory, file, or source context.
-    #  @return Result of type `'AnalysisContext'`.
+    #  @param source Library source directory, file, or source context
+    #  @return Result of type `'AnalysisContext'`
     @classmethod
     def from_source(cls, source):
         return cls.from_index(build_source_index(source))
@@ -52,9 +52,9 @@ class AnalysisContext:
     ## Prepare a located API and its explicit package-local import closure
     ## 准备指定API及其明确的包内导入闭包
     #
-    #  @param source Library source directory, file, or source context.
-    #  @param target_api Source identity of the API being analyzed.
-    #  @return Result of type `'AnalysisContext'`.
+    #  @param source Library source directory, file, or source context
+    #  @param target_api Source identity of the API being analyzed
+    #  @return Result of type `'AnalysisContext'`
     @classmethod
     def for_api(cls, source, target_api):
         return cls.from_index(build_source_index(source, target_api=target_api))
@@ -62,8 +62,8 @@ class AnalysisContext:
     ## Build analysis state from an already prepared source index
     ## 根据已准备的源码索引构建分析状态
     #
-    #  @param index Source index used for definitions and imports.
-    #  @return Result of type `'AnalysisContext'`.
+    #  @param index Source index used for definitions and imports
+    #  @return Result of type `'AnalysisContext'`
     @classmethod
     def from_index(cls, index):
         context = cls(index=index, adapter=PCResolveAdapter(index))
@@ -76,8 +76,8 @@ class AnalysisContext:
     ## Resolve the requested API to one source implementation with checked entry facts
     ## 将请求的API解析为唯一源码实现并校验入口事实
     #
-    #  @param identity Source-level identity used for lookup.
-    #  @return Result of type `Optional[IndexedFunction]`.
+    #  @param identity Source-level identity used for lookup
+    #  @return Result of type `Optional[IndexedFunction]`
     def resolve_api(self, identity):
         entry = self.index.find(identity)
         if entry is not None:
@@ -145,10 +145,10 @@ class AnalysisContext:
     ## Reject an explicitly uncertain public lookup, separately from body facts
     ## 将公开入口查找的不确定性与函数体事实分开校验
     #
-    #  @param entry Resolved source entry for the requested API.
-    #  @param lookup Requested source identity for the lookup.
-    #  @param analysis PCResolve analysis result being validated or consumed.
-    #  @return Result of type `IndexedFunction`.
+    #  @param entry Resolved source entry for the requested API
+    #  @param lookup Requested source identity for the lookup
+    #  @param analysis PCResolve analysis result being validated or consumed
+    #  @return Result of type `IndexedFunction`
     def _checked_entry(
         self, entry, lookup, analysis=None,
     ):
@@ -189,10 +189,10 @@ class AnalysisContext:
 ## Validate or construct the source index and matching analysis context
 ## 校验或构建源码索引及对应的分析上下文
 #
-#  @param package_root Root directory or file of the library source.
-#  @param import_roots Module roots used to resolve source imports.
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @return Result of type `tuple[SourceIndex, Optional[AnalysisContext]]`.
+#  @param package_root Root directory or file of the library source
+#  @param import_roots Module roots used to resolve source imports
+#  @param context Reusable analysis context for the selected source snapshot
+#  @return Result of type `tuple[SourceIndex, Optional[AnalysisContext]]`
 def prepare_context(
     package_root,
     import_roots,
@@ -224,8 +224,8 @@ def prepare_context(
 ## Require a positive integer forwarding-depth limit
 ## 要求转发深度限制为正整数
 #
-#  @param max_depth Maximum number of forwarding steps to analyze.
-#  @return Result of type `None`.
+#  @param max_depth Maximum number of forwarding steps to analyze
+#  @return Result of type `None`
 def validate_depth(max_depth):
     if isinstance(max_depth, bool) or not isinstance(max_depth, int) or max_depth < 1:
         raise ValueError("max_depth must be a positive integer")

@@ -134,10 +134,10 @@ def scan_api(
 ## Scan selected indexed functions and assemble findings, boundaries and coverage
 ## 扫描选定的索引函数并汇总发现、边界及覆盖信息
 #
-#  @param context Reusable analysis context for the selected source snapshot.
-#  @param entries Input value of type `Sequence[IndexedFunction]`.
-#  @param max_depth Maximum number of forwarding steps to analyze.
-#  @return Result of type `ScanReport`.
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entries Input value of type `Sequence[IndexedFunction]`
+#  @param max_depth Maximum number of forwarding steps to analyze
+#  @return Result of type `ScanReport`
 def _scan_entries(
     context,
     entries,
@@ -195,8 +195,8 @@ def _scan_entries(
 ## Build a report explaining that the source scope contains no Python files
 ## 构建说明源码作用域中没有Python文件的报告
 #
-#  @param index Source index used for definitions and imports.
-#  @return Result of type `ScanReport`.
+#  @param index Source index used for definitions and imports
+#  @return Result of type `ScanReport`
 def _empty_source_report(index):
     return ScanReport(
         source=index.source,
@@ -216,11 +216,11 @@ def _empty_source_report(index):
 ## Build a report for an API that cannot be resolved to one implementation
 ## 为无法解析到唯一实现的API构建报告
 #
-#  @param index Source index used for definitions and imports.
-#  @param target_api Source identity of the API being analyzed.
-#  @param code Input value of type `str`.
-#  @param message Input value of type `str`.
-#  @return Result of type `ScanReport`.
+#  @param index Source index used for definitions and imports
+#  @param target_api Source identity of the API being analyzed
+#  @param code Input value of type `str`
+#  @param message Input value of type `str`
+#  @return Result of type `ScanReport`
 def _missing_api_report(
     index, target_api, code, message
 ):
