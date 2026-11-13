@@ -222,6 +222,13 @@ establish consumption. Missing external decorator source is separately exposed
 as `decorator_source_unavailable`, while the primary assessment remains
 `UNKNOWN/decorated_entry`; the diagnostic does not approve the decorated body.
 
+Separately, assessment can prove a caller condition false for a narrowly
+validated unbound ContextVar proxy. This uses the exact source-bound callsite,
+proxy boolean fallback, no-default ContextVar construction, package
+initialization and call-prefix effects. It is a VPPDetector source proof, not a
+generic `builtin_scalar_truth` producer fact or general custom-protocol support;
+missing or conflicting premises leave the condition unresolved.
+
 Closed decorator proofs may contain finite string-suffix, string-slice and
 string-length operations, plus scalar builtin exception exits. Assess validates
 their protocol, argument/result shapes, slice bounds and completion kind. Length

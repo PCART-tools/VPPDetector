@@ -100,6 +100,8 @@ source identities and result fields.
   responsibilities and the original research scanner.
 - [Analysis coverage and limits](docs/analysis-limits.md): supported propagation,
   assessment states and unresolved analysis boundaries.
+- [Fact consumption contract](docs/fact-contract.md): PCResolve fact validation,
+  supported representations and consumer obligations.
 
 The original scanner and historical outputs are retained; see
 [Version 1.0 research scanner](docs/design.md#version-10-research-scanner).

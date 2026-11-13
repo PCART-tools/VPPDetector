@@ -347,6 +347,14 @@ can be decided without comparing payloads. A finite `and`/`or` tree of local
 outcomes give the same final Boolean. Calls, attributes, custom truth protocols
 and other comparisons do not acquire this branch proof.
 
+One separate source-backed case handles a caller guard that tests an imported
+ContextVar proxy for truth. Assessment records the guard as false only when the
+exact caller prefix and source versions are validated, the proxy's boolean
+fallback is proven false while unbound, the ContextVar has no default, and no
+reachable package initialization or earlier call effect can bind it. Missing,
+shadowed or conflicting source facts leave the condition unresolved. This narrow
+case does not establish general support for custom truth protocols.
+
 An exact PCResolve `builtin_container_length` obligation permits `len` over a
 finite builtin capture/container or a known primitive string/bytes value.
 The consumer checks the builtin target, call binding, source span/hash and every

@@ -124,6 +124,11 @@ difference between findings and analysis boundaries.
 directory relative to which Python module names are formed, not necessarily
 the package directory itself.
 
+`SourceContext.dependency_modules` optionally names external module namespaces
+to include while discovering source dependencies; it defaults to an empty
+tuple. The corresponding files must still be resolvable through the configured
+import roots, and normal source and analysis limits continue to apply.
+
 In the quick-start example, the module is `example.api`, the function's
 `qualname` is `wrapper`, and its file is `example_lib/example/api.py`.
 For methods, use a qualified name such as `Client.fetch`.
@@ -312,6 +317,10 @@ of each result.
   Missing or mismatched facts preserve syntax-only assessment. Caller facts
   never enter library flow or scan caches. Selected containers still require
   separate identity/element tracking and are not promoted to scalar values.
+- `execution_directory`: optional absolute path used as the base directory for
+  relative file paths in supported caller-side file-read facts. Without it,
+  those file contents are not recovered, though other caller facts may still
+  apply.
 - `observed_normal_returns`: bounded `ObservedNormalReturn` attestations for an
   actual source-frame entry and normal dictionary return of the same original
   call. The record includes the selected primitive, exact return span and source
