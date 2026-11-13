@@ -2,8 +2,6 @@
 #  Validate observations against supported container predicates.
 #  将运行观测与受支持的容器条件进行核对。
 
-"""Validate execution evidence against neutral source-predicate obligations."""
-
 from __future__ import annotations
 
 import ast
@@ -20,8 +18,8 @@ from .models import FunctionIdentity, SourceSpan
 ## Read the supported callable descriptor from a source node
 ## 从源码节点读取受支持的可调用描述符
 #
-#  @param node AST node or source expression being analyzed
-#  @return Result of the `_descriptor` operation
+#  @param node Predicate expression AST to inspect
+#  @return Predicate descriptor and its operands, or None for unsupported syntax
 def _descriptor(node):
     negated = False
     while isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -58,7 +56,7 @@ def _descriptor(node):
 #  @param entry Resolved source entry for the requested API
 #  @param call Original client call or its call-specific evidence
 #  @param change Description of the removed or renamed parameter
-#  @return Result of the `container_predicate` operation
+#  @return Matching predicate fact, or None if the evidence does not establish it
 def container_predicate(context, entry, call, change):
     if len(call.observed_container_predicates) != 1:
         return None

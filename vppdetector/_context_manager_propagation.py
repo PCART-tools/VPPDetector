@@ -1,8 +1,6 @@
 ## @package vppdetector._context_manager_propagation
-#  Validate bounded generator context-manager propagation.
-#  校验有界的生成器上下文管理器异常传播路径。
-
-"""Validate a narrow source proof that a generator context manager rethrows."""
+#  Validate a bounded source proof that a generator context manager rethrows.
+#  校验生成器上下文管理器重新抛出异常的有限源码证明。
 
 from __future__ import annotations
 
@@ -12,11 +10,11 @@ import hashlib
 from ._program_facts import identity_from_target
 
 
-## Convert source coordinates into a validated source span
-## 将源码坐标转换为经过校验的源码范围
+## Read the start and end coordinates of an AST node
+## 读取 AST 节点的起止坐标
 #
-#  @param node AST node or source expression being analyzed
-#  @return Result of the `_span` operation
+#  @param node AST node supplying the source coordinates
+#  @return Tuple of start line, start column, end line and end column
 def _span(node):
     return (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
 
@@ -26,8 +24,8 @@ def _span(node):
 #
 #  @param context Reusable analysis context for the selected source snapshot
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param caller Source identity of the calling function
-#  @param statement Value named `statement` supplied by the enclosing analysis
+#  @param caller Indexed source function containing the with statement
+#  @param statement With-statement AST whose manager and body are checked
 #  @return Validated manager identity and assumptions, or None when evidence is incomplete
 def rethrows_with_body(context, analysis, caller, statement):
     if (not isinstance(statement, ast.With) or len(statement.items) != 1

@@ -2,8 +2,6 @@
 #  Read exact caller argument syntax without evaluating expressions.
 #  读取精确的调用实参语法，不执行调用表达式。
 
-"""Validate source-bound caller arguments without evaluating caller expressions."""
-
 from __future__ import annotations
 
 import ast
@@ -20,12 +18,12 @@ _ASSUMPTIONS = {'source_snapshot_bindings_hold', 'standard_module_global_lookup'
 _MAX_CALLER_FILE_SIZE = 1024 * 1024
 
 
-## Convert source coordinates into a validated source span
-## 将源码坐标转换为经过校验的源码范围
+## Check whether a source span record has valid coordinates and the expected path
+## 检查源码范围记录的坐标及路径是否有效
 #
 #  @param record Producer record whose fields are validated
 #  @param path Filesystem path of the source being read or checked
-#  @return Result of the `_span` operation
+#  @return Whether the record describes a nonempty span in the expected file
 def _span(record, path):
     return (isinstance(record, dict) and record.get('file_path') == path
             and all(type(record.get(key)) is int for key in _FIELDS)
@@ -38,10 +36,11 @@ def _span(record, path):
 ## Build a bounded abstract value from caller-provided literal input
 ## 根据调用方提供的字面量输入构建有界抽象值
 #
-#  @param value Value or producer record being interpreted
+#  @param value Producer caller-literal record to convert
 #  @param budget Maximum amount of literal or container state to model
 #  @param depth Current recursive or structural analysis depth
-#  @return Result of the `_state` operation
+#  @return Abstract literal, sequence or verified caller-file text state
+#  @exception ValueError If the value is unsupported, malformed or exceeds the budget
 def _state(value, budget, depth=0):
     budget[0] -= 1
     if budget[0] < 0 or depth > 16 or not isinstance(value, dict):
@@ -151,9 +150,9 @@ def _fact_binding_names(record, tree):
 #  @param boundary Validated call boundary record
 #  @param call_node Call expression recorded at the boundary
 #  @param fact_names Names bound to the caller argument fact
-#  @param source_origin First assignment that establishes the fact
-#  @param protocol_module Module that provides the bounded return protocol
-#  @param protocol_origin Assignment that invokes the protocol factory
+#  @param source_origin Initial assignment witness, or None if unavailable
+#  @param protocol_module Optional module providing the bounded return protocol
+#  @param protocol_origin Optional witness for the protocol factory assignment
 #  @return Whether the boundary can invalidate the fact
 def _boundary_affects_fact(boundary, call_node, fact_names, source_origin,
                            protocol_module=None, protocol_origin=None):
@@ -337,12 +336,12 @@ def _caller_file_values(fact, source_node, tree, path, execution_directory):
 ## Return typed slot values and the target for this exact source call
 ## 返回此精确源码调用的类型化参数槽位和目标
 #
-#  @param adapter Value named `adapter` supplied by the enclosing analysis
+#  @param adapter PCResolve adapter providing caller-input facts
 #  @param call Original client call or its call-specific evidence
-#  @param node AST node or source expression being analyzed
-#  @param target Producer target record or selected source target
+#  @param node Original call AST to match against caller facts
+#  @param target Source identity of the originally requested target
 #  @param entry Resolved source entry for the requested API
-#  @return Result of the `caller_arguments` operation
+#  @return Validated slot values, assumptions and target, or None if proof is unavailable
 def caller_arguments(adapter, call, node, target, entry):
     if (not isinstance(call.callsite, SourceSpan)
             or not all(type(getattr(call.callsite, key)) is int for key in _FIELDS)):

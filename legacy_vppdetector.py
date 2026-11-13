@@ -1,11 +1,8 @@
-## @file legacy_vppdetector.py
+## @package legacy_vppdetector
 #  Original prototype scanner retained for reproducibility.
 #  为复现早期研究结果而保留的原型扫描器。
-
-"""Original research-prototype scanner retained for reproducibility.
-
-New integrations should import the :mod:`vppdetector` package instead.
-"""
+#  New integrations should import the vppdetector package instead.
+#  新集成应改为导入 vppdetector 包。
 
 import os
 import ast
@@ -25,7 +22,6 @@ class DefVisitor(ast.NodeVisitor):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None
     def __init__(self):
         self.target = False
 
@@ -113,7 +109,6 @@ class CallVisitor:
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None
     def __init__(self):
         self.callDict = {}
 
@@ -138,7 +133,6 @@ class CallVisitor:
     ## 收集转发已跟踪可变参数实参的调用
     #
     #  @param node AST node or source expression being analyzed
-    #  @return Result of the `dfsVisit` operation
     def dfsVisit(self, node):
         if isinstance(node, ast.Call):
             varargFlag = False
@@ -175,7 +169,6 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None
     def __init__(self):
         self.positionLst = []
         self.noFindFlag = False
@@ -210,7 +203,6 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## 从源码树中的类定义收集匹配方法
     #
     #  @param root AST root or source root used for lookup
-    #  @return Result of the `visitClasDef` operation
     def visitClasDef(self, root):
         for node in ast.iter_child_nodes(root):
             if isinstance(node, ast.ClassDef):
@@ -230,7 +222,6 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
     ## 收集匹配的模块级函数定义
     #
     #  @param root AST root or source root used for lookup
-    #  @return Result of the `visitFunctionDef` operation
     def visitFunctionDef(self, root):
         for node in ast.iter_child_nodes(root):
             if isinstance(node, ast.FunctionDef):
@@ -268,7 +259,6 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @return None
     def __init__(self):
         self.lst = []
         self.defWithVariadicParaLst = []
@@ -292,7 +282,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     ## Set the module prefix used to qualify discovered APIs
     ## 设置为发现的API添加限定名所用的模块前缀
     #
-    #  @param prefix Value named `prefix` supplied by the enclosing analysis
+    #  @param prefix Module prefix used to qualify discovered APIs
     #  @return None
     def setPrefix(self, prefix):
         self._prefix =  prefix
@@ -328,7 +318,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     #  @param callName Qualified expression naming the called API
     #  @param node AST node or source expression being analyzed
     #  @param flag Lookup mode selecting the source scope
-    #  @return Result of the `findCallDef` operation
+    #  @return Copied source positions of matching definitions
     def findCallDef(self, callName, node, flag = 0):
         positionLst = []
 
@@ -351,7 +341,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     #  @param positionLst Source positions of candidate definitions
     #  @param varargFlag Whether positional variadic values are forwarded
     #  @param kwargFlag Whether keyword variadic values are forwarded
-    #  @return Result of the `findNoKwargCallDef` operation
+    #  @return Candidate positions whose definitions lack a required channel
     def findNoKwargCallDef(self, positionLst, varargFlag, kwargFlag):
         ansLst = []
 
@@ -470,7 +460,8 @@ class FunctionDefVisitor(ast.NodeVisitor):
 ## 检测源码文件的文本编码
 #
 #  @param filePath Source file path
-#  @return Result of the `getEncoding` operation
+#  @return Encoding guessed by chardet, or None when detection is inconclusive
+#  @exception OSError If the source file cannot be read
 def getEncoding(filePath):
 
     # 读取二进制文件内容
@@ -490,7 +481,7 @@ def getEncoding(filePath):
 #
 #  @param filePath Source file path
 #  @param libName Configured library name or source-version label
-#  @return Result of the `getPrefix` operation
+#  @return Module prefix derived from the library label and source path
 def getPrefix(filePath, libName):
     index=-1
     for i in range(len(libName)):
@@ -507,11 +498,11 @@ def getPrefix(filePath, libName):
     return prefix
 
 
-## Return the numeric version suffix from a library name
-## 提取库名称中的版本后缀
+## Return the suffix starting at the first digit in a library name
+## 提取库名称中从第一个数字开始的后缀
 #
-#  @param s Value named `s` supplied by the enclosing analysis
-#  @return Result of the `getVersion` operation
+#  @param s Library name or version label
+#  @return Suffix starting at the first digit, or the original string if no digit exists
 def getVersion(s):
     index = 0
     for i, ch in enumerate(s):
@@ -525,7 +516,6 @@ def getVersion(s):
 ## 扫描多个库版本并记录可变参数API定义及转发风险
 #
 #  @param libName Configured library name or source-version label
-#  @return Result of the `getKwargAPI` operation
 def getKwargAPI(libName):
     pathObj1 = Path("D")
     pathObj1.getPath(f"/home/zhang/Packages/{libName}")
@@ -579,8 +569,6 @@ def getKwargAPI(libName):
         if len(dic) > 0:
             with open(f"KWARGS/VariadicParaPitfalls/{libName}/{fileName}.txt", 'w') as fw:
                 json.dump(dic, fw, indent=4, ensure_ascii=False)
-
-
 
         # 保存当前版本库的计数
         cntDict[fileName] = (visitor.cnt1, visitor.cnt2, visitor.cnt3)

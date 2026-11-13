@@ -2,8 +2,6 @@
 #  Read exception translation in supported decorator proofs.
 #  读取受支持装饰器证明中的异常转换信息。
 
-"""Read source exception translations inside an otherwise closed decorator proof."""
-
 from __future__ import annotations
 
 import ast
@@ -21,8 +19,8 @@ _FIELDS = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 #
 #  @param record Producer record whose fields are validated
 #  @param identity Source-level identity used for lookup
-#  @param node AST node or source expression being analyzed
-#  @return Boolean indicating whether the requested condition holds
+#  @param node AST node whose coordinates are compared
+#  @return Whether the record's file and coordinates match the source node
 def _matches(record, identity, node):
     return (isinstance(record, dict) and record.get('file_path') == str(identity.file_path)
             and all(type(record.get(key)) is int and record[key] == getattr(node, key)
@@ -34,8 +32,8 @@ def _matches(record, identity, node):
 #
 #  @param context Reusable analysis context for the selected source snapshot
 #  @param fact Producer fact being validated or interpreted
-#  @param effect Value named `effect` supplied by the enclosing analysis
-#  @return Result of the `exception_raise_binding` operation
+#  @param effect Producer exception effect containing the raise and translation evidence
+#  @return Whether the raise and any exception translation match the source evidence
 def exception_raise_binding(context, fact, effect):
     identity = identity_from_target(effect.get('function'))
     function = context.index.find(identity) if identity is not None else None

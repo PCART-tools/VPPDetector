@@ -2,8 +2,6 @@
 #  Whole-package and on-demand scans over the shared detection core.
 #  基于共享检测核心执行全包扫描和按需扫描。
 
-"""Whole-package and on-demand scopes over the same VPP detection core."""
-
 from __future__ import annotations
 
 from dataclasses import replace
@@ -135,9 +133,9 @@ def scan_api(
 ## 扫描选定的索引函数并汇总发现、边界及覆盖信息
 #
 #  @param context Reusable analysis context for the selected source snapshot
-#  @param entries Input value of type `Sequence[IndexedFunction]`
+#  @param entries Indexed functions selected for scanning
 #  @param max_depth Maximum number of forwarding steps to analyze
-#  @return Result of type `ScanReport`
+#  @return Report containing the selected functions, findings, boundaries and coverage
 def _scan_entries(
     context,
     entries,
@@ -196,7 +194,7 @@ def _scan_entries(
 ## 构建说明源码作用域中没有Python文件的报告
 #
 #  @param index Source index used for definitions and imports
-#  @return Result of type `ScanReport`
+#  @return Empty report with a no-python-sources boundary
 def _empty_source_report(index):
     return ScanReport(
         source=index.source,
@@ -218,9 +216,9 @@ def _empty_source_report(index):
 #
 #  @param index Source index used for definitions and imports
 #  @param target_api Source identity of the API being analyzed
-#  @param code Input value of type `str`
-#  @param message Input value of type `str`
-#  @return Result of type `ScanReport`
+#  @param code Machine-readable reason the API could not be resolved
+#  @param message Human-readable explanation of the resolution boundary
+#  @return Empty report with the target API and its resolution boundary
 def _missing_api_report(
     index, target_api, code, message
 ):

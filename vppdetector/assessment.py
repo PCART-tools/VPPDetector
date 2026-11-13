@@ -1,14 +1,14 @@
 ## @package vppdetector.assessment
 #  Assess one changed variadic argument under source-backed call conditions.
 #  根据源码支持的调用条件评估单个变更的可变参数实参。
-
-"""Narrow call-conditioned assessment of one variadically captured argument.
-
-This is not a Python interpreter or a repair policy. Only finite call binding,
-simple guards, finite sequence operations and named-key operations with
-PCResolve evidence are modeled.
-Unsupported control/effects stop the proof, rather than imply compatibility.
-"""
+#
+#  This is not an interpreter or repair policy. It models finite call binding,
+#  simple guards, finite sequence operations and named-key operations supported
+#  by PCResolve evidence. Unsupported control flow or effects stop the proof;
+#  they do not imply compatibility.
+#  这不是 Python 解释器或修复策略。它只建模有限调用绑定、简单守卫、
+#  有限序列操作以及有 PCResolve 证据支持的具名键操作。不受支持的控制流
+#  或副作用会终止证明，并不意味着兼容。
 
 from __future__ import annotations
 
@@ -95,12 +95,14 @@ from .source import IndexedFunction
 
 
 _UNKNOWN = object()
+
+
 ## Return the runtime namespace name for a source-defined class member
 ## 计算源码类成员在运行时命名空间中的名称
 #
-#  @param class_qualname Input value of type `str`
-#  @param member_name Input value of type `str`
-#  @return Result of type `str`
+#  @param class_qualname Qualified source class name
+#  @param member_name Declared member name to resolve
+#  @return Runtime name after applying Python's private-name mangling where applicable
 def _python_member_name(class_qualname, member_name):
     class_name = class_qualname.rsplit('.', 1)[-1].lstrip('_')
     if class_name and member_name.startswith('__') and not member_name.endswith('__'):
@@ -108,15 +110,15 @@ def _python_member_name(class_qualname, member_name):
     return member_name
 
 
+## Source parameter values retaining the actual wrapper argument count.
+#
+#  保留包装函数实际实参数量的源码参数值。
 class _BoundValues(dict):
-    """Source parameter values retaining the actual wrapper argument count."""
-
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
     #  @param values Abstract values propagated through the analysis
     #  @param positional_count Number of positional arguments supplied
-    #  @return None
     def __init__(self, values, positional_count):
         super().__init__(values)
         self.positional_count = positional_count
@@ -214,8 +216,9 @@ class _BoundSourceMethod:
 ## Read the bounded source-derived state of an abstract value
 ## 读取抽象值中有界的源码状态
 #
-#  @param value Value or producer record being interpreted
-#  @return Result of the `_source_state` operation
+#  @param value Source-derived value record to convert
+#  @return Modeled caller file, scalar, iterable, mapping or sequence state
+#  @exception ValueError If the value is not a supported source-derived state
 def _source_state(value):
     if not isinstance(value, dict):
         raise ValueError("Unproven receiver state")
@@ -248,8 +251,8 @@ def _source_state(value):
 ## Check whether the selected value remains linked to the changed argument
 ## 检查选定值是否仍关联到变更实参
 #
-#  @param value Value or producer record being interpreted
-#  @return Result of type `bool`
+#  @param value Abstract value whose selected-argument provenance is checked
+#  @return Whether the value or its supported contents are tracked
 def _tracked(value):
     if isinstance(value, _Keywords):
         return any(_tracked(item) for item in value.items.values())
@@ -263,10 +266,10 @@ def _tracked(value):
 ## Keep unresolved original values distinct from proved scalar conversions
 ## 区分尚未解析的原始值与已证明的标量转换值
 #
-#  @param value Value or producer record being interpreted
-#  @param seen Value named `seen` supplied by the enclosing analysis
-#  @param consumed_values Value named `consumed_values` supplied by the enclosing analysis
-#  @return Result of the `_raw_selected` operation
+#  @param value Abstract value checked for unconsumed selected content
+#  @param seen Optional set of visited object identities used to avoid cycles
+#  @param consumed_values Values already proven consumed on this path
+#  @return Whether an unconsumed selected value remains reachable
 def _raw_selected(value, seen=None, consumed_values=()):
     if any(value is consumed for consumed in consumed_values):
         return False
@@ -288,8 +291,8 @@ def _raw_selected(value, seen=None, consumed_values=()):
 ## Check whether a value carries a protected source-state fact
 ## 检查值是否携带受保护的源码状态事实
 #
-#  @param value Value or producer record being interpreted
-#  @return Result of type `bool`
+#  @param value Abstract value checked for protected source state
+#  @return Whether the value or its supported contents carry protected source state
 def _protected_state(value):
     if isinstance(value, _SourceInstance):
         return True
@@ -305,8 +308,8 @@ def _protected_state(value):
 ## Check whether the selected value represents tracked key presence
 ## 检查选定值是否表示被跟踪键的出现
 #
-#  @param value Value or producer record being interpreted
-#  @return Result of type `bool`
+#  @param value Abstract value checked for tracked key presence
+#  @return Whether the value represents tracked key presence
 def _key_presence(value):
     if isinstance(value, _Value):
         return value.key_presence
@@ -318,7 +321,7 @@ def _key_presence(value):
 #
 #  @param context Reusable analysis context for the selected source snapshot
 #  @param class_identity Identity of the source class
-#  @return Result of the `_class_binding_may_escape` operation
+#  @return Whether available source syntax shows a potentially escaping class reference
 def _class_binding_may_escape(context, class_identity):
     if class_identity is None or not class_identity.file_path:
         return False
@@ -365,8 +368,8 @@ def _class_binding_may_escape(context, class_identity):
 ## Convert a supported literal AST expression into a finite abstract value
 ## 将受支持的字面量AST表达式转换为有限抽象值
 #
-#  @param node AST node or source expression being analyzed
-#  @return Result of type `_Value`
+#  @param node Literal expression AST to interpret
+#  @return Literal abstract value, or an unknown abstract value for unsupported syntax
 def _finite(node):
     if isinstance(node, ast.Constant) and type(node.value) in (
         str,
@@ -385,7 +388,7 @@ def _finite(node):
 #
 #  @param function Indexed source function under analysis
 #  @param bound Whether the callable is already bound to a receiver
-#  @return Result of type `inspect.Signature`
+#  @return Signature used to bind abstract positional and keyword arguments
 def _signature(function, bound):
     args = function.node.args
     positional = args.posonlyargs + args.args
@@ -424,8 +427,7 @@ class _Stop(Exception):
     ## 初始化所属类所需的对象状态
     #
     #  @param state Current abstract or analysis state
-    #  @param reason Input value of type `str`
-    #  @return None
+    #  @param reason Machine-readable reason for stopping the proof
     def __init__(self, state, reason):
         self.state, self.reason = state, reason
 
@@ -450,11 +452,10 @@ class _Proof:
     ## 记录支持某个分析结论的证据
     #
     #  @param function Indexed source function under analysis
-    #  @param reason Value named `reason` supplied by the enclosing analysis
-    #  @param detail Value named `detail` supplied by the enclosing analysis
-    #  @param node AST node or source expression being analyzed
-    #  @param target Producer target record or selected source target
-    #  @return Result of the `note` operation
+    #  @param reason Machine-readable evidence reason
+    #  @param detail Human-readable description of the evidence
+    #  @param node Optional source AST node locating the evidence
+    #  @param target Optional source target associated with the evidence
     def note(self, function, reason, detail, node=None, target=None):
         span = (
             None
@@ -473,10 +474,9 @@ class _Proof:
     ## 以明确的分析边界终止证明
     #
     #  @param function Indexed source function under analysis
-    #  @param reason Value named `reason` supplied by the enclosing analysis
-    #  @param detail Value named `detail` supplied by the enclosing analysis
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `unknown` operation
+    #  @param reason Machine-readable analysis boundary reason
+    #  @param detail Human-readable explanation of the boundary
+    #  @param node Source AST node locating the boundary, when available
     def unknown(self, function, reason, detail, node=None):
         self.note(function, reason, detail, node)
         self.boundaries.append(
@@ -501,11 +501,10 @@ class _Proof:
     ## 记录选定实参已被消费的证据
     #
     #  @param function Indexed source function under analysis
-    #  @param reason Value named `reason` supplied by the enclosing analysis
-    #  @param detail Value named `detail` supplied by the enclosing analysis
-    #  @param node AST node or source expression being analyzed
-    #  @param target Producer target record or selected source target
-    #  @return Result of the `handled` operation
+    #  @param reason Machine-readable consumption reason
+    #  @param detail Human-readable description of the consumption
+    #  @param node Optional source AST node locating the consumption
+    #  @param target Optional source target associated with the consumption
     def handled(self, function, reason, detail, node=None, target=None):
         self.note(function, reason, detail, node, target)
         self.handled_reason = reason
@@ -519,10 +518,10 @@ class _Proof:
     #  @param positional Positional argument values for the source call
     #  @param keywords Keyword argument values for the source call
     #  @param bound Whether the callable is already bound to a receiver
-    #  @param node AST node or source expression being analyzed
-    #  @param caller Source identity of the calling function
-    #  @param change Description of the removed or renamed parameter
-    #  @return Result of the `bind` operation
+    #  @param node Optional call AST node locating a binding conflict
+    #  @param caller Optional indexed caller; defaults to the bound function
+    #  @param change Optional parameter change used to classify entry-binding failures
+    #  @return Bound abstract values and the effective positional argument count
     def bind(self, function, positional, keywords, bound, node=None, *, caller=None, change=None):
         signature = _signature(function, bound)
         owner = caller or function
@@ -609,11 +608,10 @@ class _Proof:
     ## 记录变更实参被源码拒绝的证据
     #
     #  @param function Indexed source function under analysis
-    #  @param reason Value named `reason` supplied by the enclosing analysis
-    #  @param detail Value named `detail` supplied by the enclosing analysis
-    #  @param node AST node or source expression being analyzed
-    #  @param target Producer target record or selected source target
-    #  @return Result of the `reject` operation
+    #  @param reason Machine-readable rejection reason
+    #  @param detail Human-readable explanation of the rejection
+    #  @param node Optional source AST node locating the rejection
+    #  @param target Optional rejection target; defaults to the current function
     def reject(self, function, reason, detail, node=None, target=None):
         if self.unrelated_unpack_continuation:
             self.unknown(function, 'rejection_after_unconfirmed_unpack',
@@ -627,8 +625,8 @@ class _Proof:
     #
     #  @param function Indexed source function under analysis
     #  @param analysis PCResolve analysis result being validated or consumed
-    #  @param positional_count Number of positional arguments supplied
-    #  @return Result of the `decoration_preserved` operation
+    #  @param positional_count Optional number of positional arguments supplied
+    #  @return Whether an exact supported decoration proof preserves the body and binding
     def decoration_preserved(self, function, analysis, positional_count=None):
         forwarding = wrapper_forwarding_binding(self.context, analysis, function, positional_count)
         if forwarding is not None:
@@ -843,17 +841,17 @@ class _Proof:
     #
     #  @param function Indexed source function under analysis
     #  @param values Abstract values propagated through the analysis
-    #  @param analysis PCResolve analysis result being validated or consumed
-    #  @param ancestry Value named `ancestry` supplied by the enclosing analysis
-    #  @param facts Value named `facts` supplied by the enclosing analysis
-    #  @param analysis_context Value named `analysis_context` supplied by the enclosing analysis
-    #  @param fresh_receiver Value named `fresh_receiver` supplied by the enclosing analysis
+    #  @param analysis Optional producer analysis; resolved from the context when omitted
+    #  @param ancestry Source function identities already on the forwarding path
+    #  @param facts Call-specific facts to supply to the new frame
+    #  @param analysis_context Optional source context used while running this proof
+    #  @param fresh_receiver Whether the receiver has proven fresh origin
     #  @param fresh_receiver_exclusions Attributes excluded from fresh-receiver lookup
     #  @param fresh_receiver_own_attributes Attributes known on the fresh receiver
-    #  @param fresh_receiver_class Class identity of the fresh receiver
+    #  @param fresh_receiver_class Optional source class record for the fresh receiver
     #  @param fresh_receiver_hierarchy Resolved class hierarchy of the receiver
-    #  @param fresh_receiver_allocation Allocation fact establishing receiver freshness
-    #  @return Result of the `run` operation
+    #  @param fresh_receiver_allocation Optional allocation fact establishing receiver freshness
+    #  @return Abstract result of interpreting the function body
     def run(self, function, values, *, analysis=None, ancestry=(), facts=(),
             analysis_context=None, fresh_receiver=False, fresh_receiver_exclusions=(),
             fresh_receiver_own_attributes=(), fresh_receiver_class=None,
@@ -884,16 +882,16 @@ class _Proof:
     #
     #  @param function Indexed source function under analysis
     #  @param values Abstract values propagated through the analysis
-    #  @param analysis PCResolve analysis result being validated or consumed
-    #  @param ancestry Value named `ancestry` supplied by the enclosing analysis
-    #  @param facts Value named `facts` supplied by the enclosing analysis
-    #  @param fresh_receiver Value named `fresh_receiver` supplied by the enclosing analysis
+    #  @param analysis Optional producer analysis; resolved from the context when omitted
+    #  @param ancestry Source function identities already on the forwarding path
+    #  @param facts Call-specific facts to supply to the new frame
+    #  @param fresh_receiver Whether the receiver has proven fresh origin
     #  @param fresh_receiver_exclusions Attributes excluded from fresh-receiver lookup
     #  @param fresh_receiver_own_attributes Attributes known on the fresh receiver
-    #  @param fresh_receiver_class Class identity of the fresh receiver
+    #  @param fresh_receiver_class Optional source class record for the fresh receiver
     #  @param fresh_receiver_hierarchy Resolved class hierarchy of the receiver
-    #  @param fresh_receiver_allocation Allocation fact establishing receiver freshness
-    #  @return Result of the `_run` operation
+    #  @param fresh_receiver_allocation Optional allocation fact establishing receiver freshness
+    #  @return Abstract result of interpreting the function body
     def _run(self, function, values, *, analysis=None, ancestry=(), facts=(),
             fresh_receiver=False, fresh_receiver_exclusions=(),
             fresh_receiver_own_attributes=(), fresh_receiver_class=None,
@@ -1066,9 +1064,8 @@ class _Frame:
     ## Stop the proof with an explicit analysis boundary
     ## 以明确的分析边界终止证明
     #
-    #  @param reason Value named `reason` supplied by the enclosing analysis
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `unknown` operation
+    #  @param reason Machine-readable analysis boundary reason
+    #  @param node Source AST node locating the boundary, when available
     def unknown(self, reason, node):
         self.proof.unknown(
             self.function, reason, ast.unparse(node), node if self.analysis is not None else None
@@ -1077,8 +1074,8 @@ class _Frame:
     ## Determine whether a syntax node depends on the selected argument
     ## 判断语法节点是否依赖选定实参
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `related` operation
+    #  @param node AST subtree inspected for selected-argument references
+    #  @return Whether the syntax references a tracked value or argument carrier
     def related(self, node):
         return any(
             isinstance(item, ast.Name)
@@ -1093,8 +1090,8 @@ class _Frame:
     ## Resolve one attribute on the receiver only under a fresh-origin fact
     ## 仅依据新对象来源事实解析接收者属性
     #
-    #  @param method_name Value named `method_name` supplied by the enclosing analysis
-    #  @return Result of the `fresh_lookup` operation
+    #  @param method_name Receiver attribute name to resolve
+    #  @return Supported lookup record, or None if the receiver or lookup is unproven
     def fresh_lookup(self, method_name):
         positional = self.function.node.args.posonlyargs + self.function.node.args.args
         if (not self.function.is_bound_method or not positional
@@ -1234,11 +1231,11 @@ class _Frame:
                 'receiver_class': receiver_class, 'hierarchy': tuple(hierarchy),
                 'allocation': allocation}
 
-    ## Read finite key-value pairs from a supported mapping expression
-    ## 从受支持的映射表达式读取有限键值对
+    ## Resolve a supported one-item mapping iteration in a for loop
+    ## 解析 for 循环中受支持的单项映射遍历
     #
-    #  @param statement Value named `statement` supplied by the enclosing analysis
-    #  @return Result of the `mapping_items` operation
+    #  @param statement For-loop AST node to validate
+    #  @return Modeled keyword mapping, or None if the iteration is unsupported
     def mapping_items(self, statement):
         if (not isinstance(statement, ast.For) or statement.orelse
                 or not isinstance(statement.target, (ast.Tuple, ast.List))
@@ -1271,8 +1268,8 @@ class _Frame:
     ## Accept finite-model reads, not calls, projections or known getters
     ## 只接受有限模型中的直接读取，不接受调用、投影或getter
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `simple_guard_read` operation
+    #  @param node Guard expression AST to check for a supported direct read
+    #  @return Whether the expression is a supported direct, untracked read
     def simple_guard_read(self, node):
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             return self.simple_guard_read(node.operand)
@@ -1300,8 +1297,8 @@ class _Frame:
     ## Record an unrelated error-only guard without inventing its value
     ## 记录无关的仅错误守卫，不据此虚构条件值
     #
-    #  @param statement Value named `statement` supplied by the enclosing analysis
-    #  @return Result of the `normal_path_guard` operation
+    #  @param statement Conditional AST node containing the guard
+    #  @return Whether a supported normal-path precondition was recorded
     def normal_path_guard(self, statement):
         if self.related(statement) or not self.simple_guard_read(statement.test):
             return False
@@ -1352,7 +1349,7 @@ class _Frame:
     ## 确认内建名称未在源码作用域中被重新绑定
     #
     #  @param name Name to match or validate in the current scope
-    #  @return Result of the `unshadowed_builtin_name` operation
+    #  @return Whether the name is unbound in the frame and containing source scopes
     def unshadowed_builtin_name(self, name):
         from pcresolve.scope_facts import statement_scope_facts
 
@@ -1376,9 +1373,9 @@ class _Frame:
     ## Join only pure local identity probes, without reading custom truth values
     ## 只合并本地纯身份判断，不触发自定义真假转换
     #
-    #  @param node AST node or source expression being analyzed
+    #  @param node Identity-test expression AST to evaluate
     #  @param depth Current recursive or structural analysis depth
-    #  @return Result of the `finite_identity_truth` operation
+    #  @return Set of possible truth values, or None for an unsupported expression
     def finite_identity_truth(self, node, depth=0):
         if depth > 8:
             return None
@@ -1410,7 +1407,7 @@ class _Frame:
     ## Create an isolated proof frame for one control-flow branch
     ## 为单个控制流分支创建隔离的证明帧
     #
-    #  @return Result of the `_branch_frame` operation
+    #  @return Branch frame with isolated mutable state and proof evidence
     def _branch_frame(self):
         proof = _Proof(
             self.proof.context,
@@ -1437,9 +1434,10 @@ class _Frame:
     ## Reject only when every reachable modeled branch rejects the argument
     ## 仅在所有可达且已建模分支均拒绝实参时判定拒绝
     #
-    #  @param statement Value named `statement` supplied by the enclosing analysis
+    #  @param statement Conditional AST node whose branches are analyzed
     #  @param continuation Statements to analyze after a branch
-    #  @return Result of the `_reject_if_all_branches_reject` operation
+    #  @return False if at least one branch does not prove rejection
+    #  @exception _Stop If every modeled branch proves rejection
     def _reject_if_all_branches_reject(self, statement, continuation):
         evidence_start = len(self.proof.evidence)
         boundaries_start = len(self.proof.boundaries)
@@ -1478,7 +1476,6 @@ class _Frame:
     ## 解释受支持语句并合并其有限执行结果
     #
     #  @param statements Source statements to interpret
-    #  @return Result of the `statements` operation
     def statements(self, statements):
         for statement_index, statement in enumerate(statements):
             if self.returned:
@@ -1830,10 +1827,10 @@ class _Frame:
     ## Bind exact builtin tuple/list shapes without invoking an iterator protocol
     ## 绑定精确的内建tuple/list形状，不调用自定义迭代协议
     #
-    #  @param target Producer target record or selected source target
-    #  @param value Value or producer record being interpreted
+    #  @param target Assignment target AST to unpack
+    #  @param value Abstract positional value to bind
     #  @param depth Current recursive or structural analysis depth
-    #  @return Result of the `finite_unpack` operation
+    #  @return List of target names paired with their abstract values
     def finite_unpack(self, target, value, depth=0):
         if depth > 8:
             self.unknown('unpacking_binding_unproven', target)
@@ -1855,8 +1852,8 @@ class _Frame:
     ## Resolve truth only for values with a supported finite protocol
     ## 仅对具有受支持有限协议的值解析真假
     #
-    #  @param value Value or producer record being interpreted
-    #  @return Result of the `truth` operation
+    #  @param value Abstract value whose finite truth is queried
+    #  @return Known truth value, or None when the model cannot determine it
     @staticmethod
     def truth(value):
         if isinstance(value, (_Keywords, _Positionals, _KeySet)):
@@ -1868,8 +1865,8 @@ class _Frame:
     ## Interpret one expression under the bounded value model
     ## 在有界值模型下解释单个表达式
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `expression` operation
+    #  @param node Expression AST to interpret
+    #  @return Abstract value produced by the bounded expression model
     def expression(self, node):
         self.expression_depth += 1
         try:
@@ -1880,8 +1877,8 @@ class _Frame:
     ## Evaluate supported expression forms without executing source code
     ## 解释受支持的表达式形式而不执行源码
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `_expression` operation
+    #  @param node Expression AST to interpret
+    #  @return Abstract value produced by the bounded expression model
     def _expression(self, node):
         if isinstance(node, ast.Constant):
             return _finite(node)
@@ -2085,7 +2082,7 @@ class _Frame:
     ## 解析简单导入源码类及其构造器
     #
     #  @param name Imported class binding in the analyzed module
-    #  @return Result of the `imported_source_class` operation
+    #  @return Source class and constructor model, or None when either is unproven
     def imported_source_class(self, name):
         aliases = self.proof.context.index.imports.get(self.function.identity.module, {})
         imported = aliases.get(name)
@@ -2127,8 +2124,8 @@ class _Frame:
     ## Expand finite positional values while retaining their source slots
     ## 展开有限位置实参并保留其来源槽位
     #
-    #  @param nodes Value named `nodes` supplied by the enclosing analysis
-    #  @return Result of the `positional_items` operation
+    #  @param nodes Positional argument AST nodes, including any starred arguments
+    #  @return List of abstract positional argument values
     def positional_items(self, nodes):
         positional = []
         for argument in nodes:
@@ -2144,15 +2141,15 @@ class _Frame:
     ## Project one original position through a supported container operation
     ## 通过受支持容器操作投影一个原始位置
     #
-    #  @param value Value or producer record being interpreted
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `positional_projection` operation
+    #  @param value Modeled positional sequence being indexed or sliced
+    #  @param node Subscript AST selecting the modeled positional value
+    #  @return Selected abstract element or modeled sequence slice
     def positional_projection(self, value, node):
         ## Resolve one selected positional item from its projected sequence
         ## 从投影序列解析选定的位置实参项
         #
-        #  @param item Value named `item` supplied by the enclosing analysis
-        #  @return Result of the `index` operation
+        #  @param item Index or slice-bound AST expression, or None for an omitted bound
+        #  @return Integer index or None for an omitted bound
         def index(item):
             if item is None:
                 return None
@@ -2178,11 +2175,11 @@ class _Frame:
         except (IndexError, TypeError, ValueError):
             self.unknown("positional_projection_unproven", node)
 
-    ## Bind the original call arguments to the analyzed source function
-    ## 将原始调用实参绑定到被分析的源码函数
+    ## Extract finite positional and keyword values from a call expression
+    ## 从调用表达式提取有限的位置和关键字实参值
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `arguments` operation
+    #  @param node Call AST whose arguments are interpreted
+    #  @return Pair of positional values and keyword-name-to-value mapping
     def arguments(self, node):
         positional, keywords = self.positional_items(node.args), {}
         for keyword in node.keywords:
@@ -2205,8 +2202,8 @@ class _Frame:
     ## Analyze a call expression while preserving argument provenance
     ## 分析调用表达式并保留实参来源信息
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `call` operation
+    #  @param node Call AST to interpret
+    #  @return Abstract result of the supported call model
     def call(self, node):
         self.pending_values.append([])
         try:
@@ -2217,8 +2214,8 @@ class _Frame:
     ## Resolve and interpret the supported effects of a call expression
     ## 解析并解释调用表达式的受支持效果
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `_call` operation
+    #  @param node Call AST to interpret
+    #  @return Abstract result of the supported call model
     def _call(self, node):
         if self.analysis is None:
 
@@ -2875,11 +2872,11 @@ class _Frame:
     ## Bind only exact call-time containers of this local source definition
     ## 仅绑定此局部源码定义在调用时收到的精确容器
     #
-    #  @param target Producer target record or selected source target
-    #  @param call Original client call or its call-specific evidence
-    #  @param local Value named `local` supplied by the enclosing analysis
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `capture_values` operation
+    #  @param target Indexed local source function whose captures are resolved
+    #  @param call PCResolve producer call record being analyzed
+    #  @param local Local source function whose captured values are resolved
+    #  @param node Call AST locating the capture witness
+    #  @return Mapping from capture names to their current modeled container values
     def capture_values(self, target, call, local, node):
         owner = self.function.identity
         if (
@@ -2975,9 +2972,9 @@ class _Frame:
     ## Validate a source-bound callable and its argument binding
     ## 校验源码绑定的可调用对象及其实参绑定
     #
-    #  @param call Original client call or its call-specific evidence
-    #  @param binding Value named `binding` supplied by the enclosing analysis
-    #  @return Result of the `source_callable_binding` operation
+    #  @param call PCResolve producer call record being analyzed
+    #  @param binding Producer evidence for the callable instance and its binding
+    #  @return Modeled source instance, or None if the binding or state is unproven
     def source_callable_binding(self, call, binding):
         if not binding or call.binding_status != "complete" or call.binding_issues:
             return None
@@ -3058,8 +3055,8 @@ class _Frame:
     ## Resolve a supported instance check without invoking custom behavior
     ## 解析受支持的实例检查且不调用自定义行为
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `instance_guard` operation
+    #  @param node Instance-check call AST to interpret
+    #  @return Abstract truth value, including an unknown value when not provable
     def instance_guard(self, node):
         value = self.expression(node.args[0])
         if not isinstance(value, _Value) or value.literal is _UNKNOWN:
@@ -3119,7 +3116,7 @@ class _Frame:
 ## 将原始调用解析为受支持的AST表达式
 #
 #  @param call Original client call or its call-specific evidence
-#  @return Result of type `Optional[ast.Call]`
+#  @return Parsed call AST, or None if the expression is invalid or not a call
 def _parse_call(call):
     if isinstance(call.expression, ast.Call):
         return call.expression
@@ -3137,7 +3134,7 @@ def _parse_call(call):
 #
 #  @param context Reusable analysis context for the selected source snapshot
 #  @param entry Resolved source entry for the requested API
-#  @return Result of the `_class_identity_for_method` operation
+#  @return Unique lexical class identity, or None if the owner cannot be identified
 def _class_identity_for_method(context, entry):
     owner, separator, method = entry.identity.qualname.rpartition('.')
     if not separator or not owner or not entry.identity.file_path:
@@ -3154,12 +3151,11 @@ def _class_identity_for_method(context, entry):
         return None
     matches = []
 
-    ## Traverse one producer dependency node and validate its source evidence
-    ## 遍历一个生产者依赖节点并校验其源码证据
+    ## Find the method's lexical class in nested source scopes
+    ## 在嵌套源码作用域中查找方法所属的词法类
     #
-    #  @param statements Source statements to interpret
-    #  @param scope Value named `scope` supplied by the enclosing analysis
-    #  @return Result of the `visit` operation
+    #  @param statements Source statements in the current scope
+    #  @param scope Enclosing class and function names
     def visit(statements, scope=()):
         for statement in statements:
             if isinstance(statement, ast.ClassDef):
@@ -3181,11 +3177,11 @@ def _class_identity_for_method(context, entry):
 ## Validate one source ``**kwargs`` map forwarded into a callee ``**kwargs``
 ## 验证源码中的**kwargs映射被转发至被调函数的**kwargs形参
 #
-#  @param node AST node or source expression being analyzed
-#  @param caller Source identity of the calling function
-#  @param target Producer target record or selected source target
-#  @param facts Value named `facts` supplied by the enclosing analysis
-#  @return Result of the `_exact_keyword_container_forwarding` operation
+#  @param node Call AST containing the keyword expansion
+#  @param caller Indexed source function forwarding the keyword capture
+#  @param target Indexed source callee receiving the keyword capture
+#  @param facts Producer call facts for the forwarding edge
+#  @return Whether the source and target captures match the exact forwarding proof
 def _exact_keyword_container_forwarding(node, caller, target, facts):
     source_name = caller.signature.kwarg
     target_name = target.signature.kwarg

@@ -1,8 +1,8 @@
 ## @package vppdetector._contextvar_proxy
 #  Resolve false predicates for source-backed ContextVar proxies.
 #  解析源码定义的ContextVar代理对象为假的条件事实。
-
-"""Recognize an unbound ContextVar proxy without naming a framework."""
+#  Recognize unbound proxies without relying on a specific framework name.
+#  识别未绑定的代理，不依赖特定框架名称。
 
 from __future__ import annotations
 
@@ -385,7 +385,7 @@ def _package_sets_contextvar(context, packages, contextvar_identity=None):
     #
     #  @param module Qualified source module name
     #  @param class_node Source class definition
-    #  @param visited Class identities already checked
+    #  @param visited Optional set of class identities already checked
     #  @return Whether construction is proven inert
     def constructor_is_inert(module, class_node, visited=None):
         visited = set() if visited is None else visited
@@ -733,8 +733,8 @@ def _has_execution_exit(statements):
 #  @param context Reusable analysis context for the selected source snapshot
 #  @param proxy_module Module containing the imported proxy class
 #  @param proxy_class Proxy class identity
-#  @param proxy_tree Parsed source for the proxy class module
-#  @return Source facts only for the validated false-fallback protocol
+#  @param proxy_tree Parsed proxy module tree; the current source is reloaded for validation
+#  @return Source facts on success; False or None when the protocol is unproven
 def _proxy_bool_is_unbound_false(context, proxy_module, proxy_class, proxy_tree):
     proxy_path, proxy_tree = _module_tree(context, proxy_module)
     if proxy_path is None or proxy_tree is None:

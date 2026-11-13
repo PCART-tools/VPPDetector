@@ -1,8 +1,6 @@
 ## @package vppdetector._analysis_context
-#  Fixed source preparation and reusable analysis state.
-#  管理固定源码快照及可复用的分析状态。
-
-"""Fixed source preparation and shared facts, independent of scan/assess policy."""
+#  Prepare fixed source and shared reusable facts independently of scan or assessment policy.
+#  准备固定源码和可复用的共享事实，不依赖扫描或评估策略。
 
 from __future__ import annotations
 
@@ -25,10 +23,11 @@ PathLike = Union[str, Path]
 ScanSource = Union[PathLike, SourceContext]
 
 
+## Reusable source and PCResolve state for one library source version.
+#
+#  单个库源码版本的可复用源码及 PCResolve 状态。
 @dataclass
 class AnalysisContext:
-    """Reusable source and PCResolve state for one library source version."""
-
     index: SourceIndex
     adapter: PCResolveAdapter
     _scan_cache: dict = field(default_factory=dict, init=False, repr=False)
@@ -44,7 +43,7 @@ class AnalysisContext:
     ## 根据源码上下文构建可复用的分析上下文
     #
     #  @param source Library source directory, file, or source context
-    #  @return Result of type `'AnalysisContext'`
+    #  @return Reusable context built from the indexed source snapshot
     @classmethod
     def from_source(cls, source):
         return cls.from_index(build_source_index(source))
@@ -54,7 +53,7 @@ class AnalysisContext:
     #
     #  @param source Library source directory, file, or source context
     #  @param target_api Source identity of the API being analyzed
-    #  @return Result of type `'AnalysisContext'`
+    #  @return Context indexed for the requested API and its package-local imports
     @classmethod
     def for_api(cls, source, target_api):
         return cls.from_index(build_source_index(source, target_api=target_api))
@@ -63,7 +62,7 @@ class AnalysisContext:
     ## 根据已准备的源码索引构建分析状态
     #
     #  @param index Source index used for definitions and imports
-    #  @return Result of type `'AnalysisContext'`
+    #  @return Context sharing the index's validated source documents
     @classmethod
     def from_index(cls, index):
         context = cls(index=index, adapter=PCResolveAdapter(index))
@@ -77,7 +76,8 @@ class AnalysisContext:
     ## 将请求的API解析为唯一源码实现并校验入口事实
     #
     #  @param identity Source-level identity used for lookup
-    #  @return Result of type `Optional[IndexedFunction]`
+    #  @return Checked source implementation, or None if no implementation is resolved
+    #  @exception ResolutionError If required entry binding or source facts are unavailable
     def resolve_api(self, identity):
         entry = self.index.find(identity)
         if entry is not None:
@@ -147,8 +147,9 @@ class AnalysisContext:
     #
     #  @param entry Resolved source entry for the requested API
     #  @param lookup Requested source identity for the lookup
-    #  @param analysis PCResolve analysis result being validated or consumed
-    #  @return Result of type `IndexedFunction`
+    #  @param analysis Optional producer analysis; obtained from the adapter when omitted
+    #  @return The indexed entry after its public binding facts are checked
+    #  @exception ResolutionError If entry binding facts are missing or conflicting
     def _checked_entry(
         self, entry, lookup, analysis=None,
     ):
@@ -192,7 +193,8 @@ class AnalysisContext:
 #  @param package_root Root directory or file of the library source
 #  @param import_roots Module roots used to resolve source imports
 #  @param context Reusable analysis context for the selected source snapshot
-#  @return Result of type `tuple[SourceIndex, Optional[AnalysisContext]]`
+#  @return Source index and matching context; the context is None if no files were found
+#  @exception ValueError If a supplied context uses different source or import roots
 def prepare_context(
     package_root,
     import_roots,
@@ -225,7 +227,7 @@ def prepare_context(
 ## 要求转发深度限制为正整数
 #
 #  @param max_depth Maximum number of forwarding steps to analyze
-#  @return Result of type `None`
+#  @exception ValueError If max_depth is not a positive integer or is a boolean
 def validate_depth(max_depth):
     if isinstance(max_depth, bool) or not isinstance(max_depth, int) or max_depth < 1:
         raise ValueError("max_depth must be a positive integer")

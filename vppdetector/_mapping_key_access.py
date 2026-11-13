@@ -1,8 +1,6 @@
 ## @package vppdetector._mapping_key_access
-#  Read optional source facts for mapping-key access.
-#  读取映射键访问所需的可选源码事实。
-
-"""Consume optional PCResolve source footprints without assuming execution."""
+#  Read optional PCResolve mapping-key footprints without assuming execution.
+#  读取可选的 PCResolve 映射键访问足迹，不假定其已执行。
 
 from __future__ import annotations
 
@@ -12,8 +10,8 @@ from ._program_facts import identity_from_target
 ## Validate and convert a producer target into a source identity
 ## 校验并将生产者目标转换为源码身份
 #
-#  @param value Value or producer record being interpreted
-#  @return Result of the `_identity` operation
+#  @param value Producer target record to convert
+#  @return Source identity, or None if the producer record is invalid
 def _identity(value):
     try:
         return identity_from_target(value)
@@ -26,7 +24,7 @@ def _identity(value):
 #
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param function Indexed source function under analysis
-#  @return Result of the `closed_keys` operation
+#  @return Validated set of accessed keys, or None if the footprint is unproven
 def closed_keys(analysis, function):
     summaries = [item for item in analysis.functions
                  if isinstance(item, dict)

@@ -2,8 +2,6 @@
 #  Validate metadata queries made during source class creation.
 #  校验源码类创建期间发生的元数据查询。
 
-"""Validate metadata-query premises embedded in source class creation effects."""
-
 _CLAIM = "source_class_creation_callable_metadata_queries"
 _FIELDS = ("lineno", "col_offset", "end_lineno", "end_col_offset")
 _INPUT_PROTOCOLS = {
@@ -37,21 +35,21 @@ _OBSERVERS = {
 }
 
 
-## Extract finite string values from a producer fact
-## 从生产者事实中提取有限字符串值
+## Check whether a value is a list or tuple of strings
+## 检查值是否为字符串列表或元组
 #
-#  @param value Value or producer record being interpreted
-#  @return Result of the `_strings` operation
+#  @param value Candidate list or tuple of string values
+#  @return Whether every element is a string
 def _strings(value):
     return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
 
 
-## Validate and convert a producer target into a source identity
-## 校验并将生产者目标转换为源码身份
+## Validate the fields of a producer source identity
+## 校验生产者源码身份的字段
 #
-#  @param value Value or producer record being interpreted
+#  @param value Producer source identity record to validate
 #  @param hashes Source-content hashes supplied by the producer
-#  @return Result of the `_identity` operation
+#  @return Whether the identity has valid fields and a hashed source file
 def _identity(value, hashes):
     return (
         isinstance(value, dict)
@@ -68,9 +66,9 @@ def _identity(value, hashes):
 ## Validate a source witness against its owner and evidence record
 ## 根据所属对象和证据记录校验源码见证
 #
-#  @param value Value or producer record being interpreted
+#  @param value Producer source witness record to validate
 #  @param owner Source identity that owns the queried behavior
-#  @return Result of the `_witness` operation
+#  @return Whether the witness coordinates and file match the owner
 def _witness(value, owner):
     return (
         isinstance(value, dict)
@@ -84,9 +82,9 @@ def _witness(value, owner):
 ## Check whether one source span is contained in another
 ## 检查一个源码范围是否包含于另一个范围
 #
-#  @param inner Value named `inner` supplied by the enclosing analysis
-#  @param outer Value named `outer` supplied by the enclosing analysis
-#  @return Result of the `_contained` operation
+#  @param inner Source span to check for containment
+#  @param outer Source span that may contain the inner span
+#  @return Whether the spans share a file and the outer span contains the inner span
 def _contained(inner, outer):
     return (
         inner["file_path"] == outer["file_path"]
@@ -95,12 +93,12 @@ def _contained(inner, outer):
     )
 
 
-## Read a supported metadata observer from one producer call
-## 从生产者调用中读取受支持的元数据观察器
+## Validate metadata observer guards for one producer call
+## 校验生产者调用的元数据观察守卫
 #
-#  @param call Original client call or its call-specific evidence
+#  @param call PCResolve producer call record being analyzed
 #  @param hashes Source-content hashes supplied by the producer
-#  @return Result of the `_observer` operation
+#  @return Whether the observer guards and their source witnesses are valid
 def _observer(call, hashes):
     guard = call.get("observation_guard")
     if (
@@ -164,10 +162,10 @@ def _observer(call, hashes):
 ## Validate a metadata query and its source-bound target
 ## 校验元数据查询及其源码绑定目标
 #
-#  @param call Original client call or its call-specific evidence
+#  @param call PCResolve producer call record being analyzed
 #  @param entry Resolved source entry for the requested API
 #  @param hashes Source-content hashes supplied by the producer
-#  @return Result of the `_query` operation
+#  @return Sorted supported protocols, or None if the metadata query is unproven
 def _query(call, entry, hashes):
     query = call.get("query")
     if (
@@ -285,9 +283,9 @@ def _query(call, entry, hashes):
 ## Require each metadata query's conditional input and actual source binding
 ## 逐项核对元数据查询的条件输入及实际源码绑定
 #
-#  @param hook Value named `hook` supplied by the enclosing analysis
-#  @param supporting_source_hashes Hashes of supporting source files used by producer facts
-#  @return Result of the `creation_metadata_premises` operation
+#  @param hook Producer hook fact containing metadata query evidence
+#  @param supporting_source_hashes Optional hashes of supporting source files used by the proof
+#  @return Whether all required metadata query premises are supported
 def creation_metadata_premises(hook, supporting_source_hashes=None):
     primary = hook.get('source_hashes')
     supporting = {} if supporting_source_hashes is None else supporting_source_hashes
@@ -448,13 +446,13 @@ def creation_metadata_premises(hook, supporting_source_hashes=None):
     return True
 
 
-## Read the dynamic signature parameters established by the hook proof
-## 读取钩子证明所确定的动态签名参数
+## Validate dynamic signature parameters established by the hook proof
+## 校验钩子证明所确定的动态签名参数
 #
-#  @param hook Value named `hook` supplied by the enclosing analysis
-#  @param proof Proof state that receives evidence and boundaries
+#  @param hook Producer hook fact containing metadata query evidence
+#  @param proof Producer proof containing dynamic parameter records
 #  @param hashes Source-content hashes supplied by the producer
-#  @return Result of the `_dynamic_signature_parameters` operation
+#  @return Whether the dynamic parameter records and their evidence are valid
 def _dynamic_signature_parameters(hook, proof, hashes):
     dynamic = proof.get('dynamic_parameters')
     if not isinstance(dynamic, (list, tuple)) or not 1 <= len(dynamic) <= 256:
@@ -648,10 +646,10 @@ def _dynamic_signature_parameters(hook, proof, hashes):
 ## Validate signature-construction effects and their source evidence
 ## 校验签名构造效果及其源码证据
 #
-#  @param hook Value named `hook` supplied by the enclosing analysis
-#  @param complete_source_hashes Hashes for the complete source snapshot
+#  @param hook Producer hook fact containing signature-construction evidence
+#  @param complete_source_hashes Optional hashes for the complete source snapshot
 #  @param related_callers Related caller identities considered for signature creation
-#  @return Result of the `_signature_creations` operation
+#  @return Whether the signature-construction claims are supported
 def _signature_creations(hook, complete_source_hashes=None, related_callers=()):
     records = hook.get('signature_creations')
     claim = 'standard_library_inspect_signature_creation'

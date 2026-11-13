@@ -1,8 +1,6 @@
 ## @package vppdetector._readonly
-#  Freeze cached facts while preserving controlled expansion copies.
-#  冻结缓存事实，同时保留受控扩展所需的副本。
-
-"""Read-only cached fact trees, with mutable deep copies for producer expansion."""
+#  Freeze cached fact trees while allowing mutable deep copies for expansion.
+#  冻结缓存事实树，同时允许创建可变深拷贝供扩展使用。
 
 from __future__ import annotations
 
@@ -13,11 +11,9 @@ from dataclasses import asdict, fields, is_dataclass
 ## Reject mutations on cached read-only fact containers
 ## 拒绝对只读缓存事实容器的修改
 #
-#  @param *args Arguments to the operation
-#  @param **kwargs Keyword options for the operation
 #  @param args Positional arguments passed to the immutable operation
 #  @param kwargs Keyword arguments passed to the immutable operation
-#  @return None; always raises TypeError to reject the attempted mutation
+#  @exception TypeError Always raised to reject the attempted mutation
 def _immutable(*args, **kwargs):
     raise TypeError("Cached program facts are read-only; use deepcopy for a separate copy")
 
@@ -31,8 +27,8 @@ class _FactList(list):
     ## Create a mutable deep copy for isolated producer expansion
     ## 为隔离的生产者扩展创建可变深拷贝
     #
-    #  @param memo Value named `memo` supplied by the enclosing analysis
-    #  @return Result of the `__deepcopy__` operation
+    #  @param memo Deep-copy memo used to preserve shared references
+    #  @return Mutable list containing deep copies of the fact items
     def __deepcopy__(self, memo):
         result = []
         memo[id(self)] = result
@@ -49,8 +45,8 @@ class _FactDict(dict):
     ## Create a mutable deep copy for isolated producer expansion
     ## 为隔离的生产者扩展创建可变深拷贝
     #
-    #  @param memo Value named `memo` supplied by the enclosing analysis
-    #  @return Result of the `__deepcopy__` operation
+    #  @param memo Deep-copy memo used to preserve shared references
+    #  @return Mutable dictionary containing deep copies of the fact fields
     def __deepcopy__(self, memo):
         result = {}
         memo[id(self)] = result
@@ -66,8 +62,8 @@ class _FactRecord:
     ## Create a mutable deep copy for isolated producer expansion
     ## 为隔离的生产者扩展创建可变深拷贝
     #
-    #  @param memo Value named `memo` supplied by the enclosing analysis
-    #  @return Result of the `__deepcopy__` operation
+    #  @param memo Deep-copy memo used to preserve shared references
+    #  @return Mutable instance of the original record type with copied fields
     def __deepcopy__(self, memo):
         result = object.__new__(self._record_type)
         memo[id(self)] = result
@@ -75,11 +71,11 @@ class _FactRecord:
             object.__setattr__(result, item.name, deepcopy(getattr(self, item.name), memo))
         return result
 
-    ## Compare the fact record with another mapping or record
-    ## 将事实记录与其他映射或记录进行比较
+    ## Compare the fact record with another instance of its original type
+    ## 将事实记录与其原始类型的另一个实例进行比较
     #
-    #  @param other Value named `other` supplied by the enclosing analysis
-    #  @return Result of the `__eq__` operation
+    #  @param other Object to compare with this fact record
+    #  @return Whether all fields match, or NotImplemented for another type
     def __eq__(self, other):
         if not isinstance(other, self._record_type):
             return NotImplemented
@@ -88,18 +84,20 @@ class _FactRecord:
     ## Return a mutable dictionary copy of the fact record
     ## 返回事实记录的可变字典副本
     #
-    #  @return Result of the `to_dict` operation
+    #  @return Dictionary containing mutable deep copies of the record fields
     def to_dict(self):
         return asdict(deepcopy(self))
 
 
 _RECORD_TYPES = {}
+
+
 ## Freeze one producer result once; preserve dict/list and dataclass readers
 ## 冻结一次生产者结果，同时保留dict、list和dataclass读取方式
 #
-#  @param value Value or producer record being interpreted
-#  @param memo Value named `memo` supplied by the enclosing analysis
-#  @return Result of the `readonly` operation
+#  @param value Producer fact tree or scalar to freeze
+#  @param memo Optional identity cache for shared and cyclic objects
+#  @return Read-only wrapper for mutable supported containers or records; other values unchanged
 def readonly(value, memo=None):
     if isinstance(value, (_FactList, _FactDict, _FactRecord)):
         return value

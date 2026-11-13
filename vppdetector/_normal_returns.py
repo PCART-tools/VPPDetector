@@ -1,8 +1,6 @@
 ## @package vppdetector._normal_returns
-#  Validate normal completion and mapping-retention evidence.
-#  校验正常完成及映射保留证据。
-
-"""Require actual completion and a producer-proven mapping retention path."""
+#  Require actual completion and a producer-proven mapping retention path.
+#  要求实际执行完成，且生产者已证明映射保留路径。
 
 from __future__ import annotations
 
@@ -23,8 +21,8 @@ from .models import FunctionIdentity, SourceSpan
 #  @param entry Resolved source entry for the requested API
 #  @param call Original client call or its call-specific evidence
 #  @param change Description of the removed or renamed parameter
-#  @param original Value named `original` supplied by the enclosing analysis
-#  @return Result of the `mapping_return` operation
+#  @param original Original argument value to match against the observation
+#  @return Matching source retention fact, or None if the proof is incomplete
 def mapping_return(context, entry, call, change, original):
     if len(call.observed_normal_returns) != 1:
         return None

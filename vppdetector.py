@@ -1,8 +1,6 @@
-## @file vppdetector.py
+## @package vppdetector
 #  Standalone command-line entry point for VPP scanning.
 #  VPP扫描功能的独立命令行入口。
-
-"""Standalone entry point for whole-package VPP risk scanning."""
 
 from __future__ import annotations
 
@@ -20,7 +18,7 @@ from vppdetector import ScanReport, scan_package
 ## 将报告值转换为可序列化的JSON数据
 #
 #  @param value Value or producer record being interpreted
-#  @return Result of type `Any`
+#  @return The value converted to JSON-compatible containers and scalars
 def _to_data(value):
     if is_dataclass(value):
         data = {field.name: _to_data(getattr(value, field.name)) for field in fields(value)}

@@ -1,8 +1,6 @@
 ## @package vppdetector._fact_adapter
-#  Adapt versioned PCResolve facts for VPP consumers.
-#  为VPP分析消费者适配带版本的PCResolve事实。
-
-"""Versioned PCResolve facts, independent of either VPP consumer's policy."""
+#  Adapt versioned PCResolve facts independently of either VPP consumer policy.
+#  转换带版本的 PCResolve 事实，不依赖任一 VPP 消费方策略。
 
 from __future__ import annotations
 
@@ -16,15 +14,15 @@ from ._readonly import readonly
 from .source import _python_files
 
 
+## An unavailable producer or fact contract; consumers retain a boundary.
+#
+#  生产者或事实契约不可用；消费方保留分析边界。
 class ResolutionError(RuntimeError):
-    """An unavailable producer or fact contract; consumers retain a boundary."""
-
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @param message Value named `message` supplied by the enclosing analysis
-    #  @param code Value named `code` supplied by the enclosing analysis
-    #  @return None
+    #  @param message Human-readable explanation of the unavailable fact
+    #  @param code Machine-readable analysis boundary code
     def __init__(self, message, code="flow_analysis_failed"):
         super().__init__(message)
         self.code = code
@@ -60,7 +58,7 @@ _CALL_LISTS = (
 ## 规范化文件系统路径以便稳定比较身份
 #
 #  @param path Filesystem path of the source being read or checked
-#  @return Result of the `_path` operation
+#  @return Absolute, case-normalized path
 def _path(path):
     return os.path.normcase(os.path.abspath(path))
 
@@ -69,7 +67,7 @@ def _path(path):
 ## 在源码文件可读取时返回其内容摘要
 #
 #  @param path Filesystem path of the source being read or checked
-#  @return Result of the `_digest` operation
+#  @return SHA-256 hex digest of the file bytes, or None if reading fails
 def _digest(path):
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -81,7 +79,7 @@ def _digest(path):
 ## 一次读取源码，同时保留字节摘要和flow文本摘要
 #
 #  @param path Filesystem path of the source being read or checked
-#  @return Result of the `_source_digests` operation
+#  @return Pair of byte and normalized flow-text SHA-256 digests; unavailable digests are None
 def _source_digests(path):
     try:
         raw = path.read_bytes()
@@ -103,7 +101,7 @@ def _source_digests(path):
 ## 按PCResolve的flow解码及换行规则返回源码摘要
 #
 #  @param path Filesystem path of the source being read or checked
-#  @return Result of the `_flow_digest` operation
+#  @return Normalized flow-text SHA-256 digest, or None if reading or decoding fails
 def _flow_digest(path):
     try:
         with open(path, encoding='utf-8-sig') as stream:
@@ -112,14 +110,14 @@ def _flow_digest(path):
         return None
 
 
+## Keep source-only immutable facts; all domain query state stays outside.
+#
+#  保留仅基于源码的不可变事实，领域查询状态均位于外部。
 class PCResolveAdapter:
-    """Keep source-only immutable facts; all domain query state stays outside."""
-
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
     #  @param index Source index used for definitions and imports
-    #  @return None
     def __init__(self, index):
         try:
             from pcresolve import FlowAnalyzer, FlowCall
@@ -161,7 +159,6 @@ class PCResolveAdapter:
     ## Reject supporting-source changes after a fact snapshot is registered
     ## 在登记事实快照后拒绝支持源码发生变化
     #
-    #  @return Result of the `_validate_supporting_sources` operation
     def _validate_supporting_sources(self):
         if any(_flow_digest(path) != digest for path, digest in self._supporting_hashes.items()):
             raise ValueError('Source protocol content changed; create a new analysis context')
@@ -170,7 +167,6 @@ class PCResolveAdapter:
     ## 校验并登记支持事实引用的源码哈希
     #
     #  @param hashes Source-content hashes supplied by the producer
-    #  @return Result of the `_register_supporting_sources` operation
     def _register_supporting_sources(self, hashes):
         if (not isinstance(hashes, dict)
                 or any(not isinstance(path, str) or not os.path.isabs(path)
@@ -198,7 +194,8 @@ class PCResolveAdapter:
     ## 读取可选调用方事实，不依赖已缓存的库flow或scan结果
     #
     #  @param callsite Source location and facts for the original call
-    #  @return Result of the `caller_inputs` operation
+    #  @return Read-only caller-input fact, or None when the producer does not support it
+    #  @exception ResolutionError If the fact contract or supporting source validation fails
     def caller_inputs(self, callsite):
         try:
             from pcresolve import SourceSpan
@@ -352,7 +349,6 @@ class PCResolveAdapter:
     ## Validate once per public query, including before a domain cache hit
     ## 每次公开查询都校验源码，包括命中领域缓存前
     #
-    #  @return Result of the `validate_source` operation
     def validate_source(self):
 
         # 复用分析事实前同时检查源码集合、文件内容和额外支持源码
@@ -367,7 +363,6 @@ class PCResolveAdapter:
     ## 校验PCResolve结果字段、模式、作用域及源码哈希
     #
     #  @param analysis PCResolve analysis result being validated or consumed
-    #  @return Result of the `_validate` operation
     def _validate(self, analysis):
         missing = [name for name in ("entry", "inputs", "functions", "calls", "boundaries")
                    if not hasattr(analysis, name)]
@@ -413,7 +408,8 @@ class PCResolveAdapter:
     #  @param function Indexed source function under analysis
     #  @param max_depth Maximum number of forwarding steps to analyze
     #  @param conditional_source_state Whether to request conditional source-state facts
-    #  @return Result of the `analyze` operation
+    #  @return Validated, read-only analysis for the indexed function
+    #  @exception ResolutionError If source validation or producer analysis fails
     def analyze(self, function, max_depth=1, *, conditional_source_state=False):
         from pcresolve import FunctionRef
 
@@ -445,9 +441,11 @@ class PCResolveAdapter:
     #
     #  @param analysis PCResolve analysis result being validated or consumed
     #  @param call_id Identifier of the producer call edge
-    #  @param isolate Value named `isolate` supplied by the enclosing analysis
-    #  @param preserve_lineage Value named `preserve_lineage` supplied by the enclosing analysis
-    #  @return Result of the `expand` operation
+    #  @param isolate Whether to analyze the selected incoming call in isolation
+    #  @param preserve_lineage Whether to retain lineage in an isolated expansion
+    #  @return Validated, read-only expanded analysis
+    #  @exception ValueError If the options are not bool or lineage is requested without isolation
+    #  @exception ResolutionError If source validation or expansion fails
     def expand(self, analysis, call_id, *, isolate=False, preserve_lineage=False):
         if type(isolate) is not bool or type(preserve_lineage) is not bool:
             raise ValueError('Expansion isolation options must be bool')

@@ -2,8 +2,6 @@
 #  Consume source proofs for fresh-constructor attribute retention.
 #  使用新实例构造期间属性保留的源码证明。
 
-"""Consume source proofs of fresh-constructor attribute retention."""
-
 from __future__ import annotations
 
 import ast
@@ -17,8 +15,8 @@ from ._program_facts import identity_from_target, source_constructor_entry_bindi
 #
 #  @param path Filesystem path of the source being read or checked
 #  @param identity Source-level identity used for lookup
-#  @param source_queries Value named `source_queries` supplied by the enclosing analysis
-#  @return Result of the `_method_node` operation
+#  @param source_queries Optional reusable source syntax query service
+#  @return Unique method AST node, or None if the source or method is unavailable
 def _method_node(path, identity, source_queries=None):
     if source_queries is not None:
         return source_queries.method(path, identity)
@@ -34,13 +32,13 @@ def _method_node(path, identity, source_queries=None):
     return matches[0] if len(matches) == 1 else None
 
 
-## Build the attribute path rooted at the selected receiver
-## 构建以选定接收者为根的属性路径
+## Check whether an attribute access is rooted at the selected receiver
+## 检查属性访问是否以选定接收者为根
 #
-#  @param node AST node or source expression being analyzed
-#  @param receiver Receiver object for the source method call
+#  @param node Attribute expression AST to match against the receiver
+#  @param receiver Name of the receiver variable
 #  @param attribute Attribute name being resolved
-#  @return Result of the `_attribute_path` operation
+#  @return Whether the node directly accesses the named receiver attribute
 def _attribute_path(node, receiver, attribute):
     return (isinstance(node, ast.Attribute) and node.attr == attribute
             and isinstance(node.value, ast.Name) and node.value.id == receiver)
@@ -50,12 +48,12 @@ def _attribute_path(node, receiver, attribute):
 ## 若已检查源码方法可修改字段，则拒绝属性保留结论
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param checked Value named `checked` supplied by the enclosing analysis
-#  @param receiver Receiver object for the source method call
+#  @param checked Source method identities to inspect for later mutations
+#  @param receiver Name of the receiver variable
 #  @param attribute Attribute name being resolved
-#  @param store_line Value named `store_line` supplied by the enclosing analysis
-#  @param source_queries Value named `source_queries` supplied by the enclosing analysis
-#  @return Result of the `_later_mutation_is_possible` operation
+#  @param store_line Source line of the original constructor store
+#  @param source_queries Optional reusable source syntax query service
+#  @return Whether a later mutation or uninspectable method prevents the proof
 def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_line,
                                 source_queries=None):
     for target in checked:
@@ -93,11 +91,11 @@ def _later_mutation_is_possible(analysis, checked, receiver, attribute, store_li
 #
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param function Indexed source function under analysis
-#  @param statement Value named `statement` supplied by the enclosing analysis
-#  @param destination Value named `destination` supplied by the enclosing analysis
-#  @param mapping_capture Value named `mapping_capture` supplied by the enclosing analysis
-#  @param source_queries Value named `source_queries` supplied by the enclosing analysis
-#  @return Result of the `retained_store` operation
+#  @param statement Constructor assignment statement to match against the witness
+#  @param destination Attribute AST node receiving the stored value
+#  @param mapping_capture Optional keyword-capture parameter whose storage is checked
+#  @param source_queries Optional reusable source syntax query service
+#  @return Validated retention fact, or None when a required condition is unproven
 def retained_store(analysis, function, statement, destination, mapping_capture=None,
                    source_queries=None):
     if function.query_class is None or not isinstance(destination, ast.Attribute):

@@ -2,8 +2,6 @@
 #  Validate call-conditioned forwarding through source wrappers.
 #  校验经过源码包装函数的调用条件转发。
 
-"""Validate call-conditioned forwarding through a source factory wrapper."""
-
 import ast
 
 from ._fresh_decoration import observation_guard
@@ -72,7 +70,7 @@ def _guard_helper_can_complete(context, factory_identity, guard):
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param function Indexed source function under analysis
 #  @param positional_count Number of positional arguments supplied
-#  @return Result of the `binding` operation
+#  @return Validated forwarding fact, or None if the proof is incomplete
 def binding(context, analysis, function, positional_count):
     if type(positional_count) is not int or positional_count < 0:
         return None
@@ -140,10 +138,10 @@ def binding(context, analysis, function, positional_count):
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param value Value or producer record being interpreted
+    #  @param value Producer source witness record to validate
     #  @param identity Source-level identity used for lookup
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `witness` operation
+    #  @param node AST node whose coordinates are compared
+    #  @return Whether the witness matches the source identity and node
     def witness(value, identity, node):
         return (
             isinstance(value, dict)

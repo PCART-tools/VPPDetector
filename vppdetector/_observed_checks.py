@@ -2,8 +2,6 @@
 #  Validate runtime checkpoints against source guard facts.
 #  根据源码守卫事实校验运行时检查点。
 
-"""Validate explicit runtime checkpoints against neutral PCResolve guard facts."""
-
 from __future__ import annotations
 
 import ast
@@ -15,11 +13,11 @@ from ._program_facts import _node_location, identity_from_target
 from .models import FunctionIdentity, SourceSpan
 
 
-## Resolve and interpret the supported effects of a call expression
-## 解析并解释调用表达式的受支持效果
+## Normalize a call expression to its AST representation
+## 将调用表达式规范化为 AST 表示
 #
-#  @param text Source or expression text to parse or compare
-#  @return Result of the `_call` operation
+#  @param text Call AST or expression text to parse
+#  @return AST dump of the call, or None for invalid or non-call expressions
 def _call(text):
     try:
         node = text if isinstance(text, ast.Call) else ast.parse(text, mode='eval').body
@@ -35,8 +33,8 @@ def _call(text):
 #  @param entry Resolved source entry for the requested API
 #  @param call Original client call or its call-specific evidence
 #  @param change Description of the removed or renamed parameter
-#  @param original Value named `original` supplied by the enclosing analysis
-#  @return Result of the `keyword_check` operation
+#  @param original Original argument value to match against the observation
+#  @return Matching runtime checkpoint, or None if the evidence is insufficient
 def keyword_check(context, entry, call, change, original):
     observations = call.observed_keyword_checks
     if len(observations) != 1:

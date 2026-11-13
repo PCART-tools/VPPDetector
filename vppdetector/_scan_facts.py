@@ -2,8 +2,6 @@
 #  Compatibility exports for shared source-fact readers.
 #  为共享源码事实读取器提供兼容导出。
 
-"""Compatibility imports for the shared, domain-neutral fact readers."""
-
 from ._program_facts import (
     capture_names as capture_names,
 )

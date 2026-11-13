@@ -2,8 +2,6 @@
 #  Read member checks for statically bound fresh receivers.
 #  读取静态绑定的新接收者上的成员检查。
 
-"""Consume source member checks with a statically bound fresh receiver."""
-
 from __future__ import annotations
 
 import ast
@@ -23,21 +21,22 @@ _TEMPORARY_ASSUMPTIONS = {'standard_library_contextmanager_protocol',
     'builtin_instance_data_attribute_operations'}
 
 
-## Resolve the recognized context-manager decorator for a function
-## 解析函数上受支持的上下文管理器装饰器
+## Check whether a function has the recognized context-manager decorator
+## 检查函数是否带有受支持的上下文管理器装饰器
 #
 #  @param identity Source-level identity used for lookup
-#  @param function Indexed source function under analysis
-#  @return Result of the `_contextmanager_decorator` operation
+#  @param function Function AST node whose decorators are checked
+#  @return Whether the function has the supported contextmanager decorator
 def _contextmanager_decorator(identity, function):
     if len(function.decorator_list) != 1:
         return False
     expression = function.decorator_list[0]
+
     ## Render a dotted source expression without evaluating it
     ## 不执行表达式地生成点分隔源码名称
     #
-    #  @param node AST node or source expression being analyzed
-    #  @return Result of the `dotted` operation
+    #  @param node Name or attribute expression AST to render
+    #  @return Dotted name, or None if the expression is not a simple name or attribute
     def dotted(node):
         if isinstance(node, ast.Name):
             return node.id
@@ -73,11 +72,11 @@ def _contextmanager_decorator(identity, function):
 #
 #  @param effects Producer effect records attached to the proof
 #  @param fact Producer fact being validated or interpreted
-#  @param origin Value named `origin` supplied by the enclosing analysis
+#  @param origin Proven allocation origin of the receiver
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param context Reusable analysis context for the selected source snapshot
 #  @param function Indexed source function under analysis
-#  @return Boolean indicating whether the requested condition holds
+#  @return Set of temporary attribute names, or False if an effect is unproven
 def _temporary_effects_valid(effects, fact, origin, analysis, context, function):
     if not isinstance(effects, (list, tuple)) or len(effects) > 8:
         return False
@@ -141,10 +140,10 @@ def _temporary_effects_valid(effects, fact, origin, analysis, context, function)
 ## Determine whether a proven key condition applies to the selected argument
 ## 判断已证明的键条件是否适用于选定实参
 #
-#  @param check Value named `check` supplied by the enclosing analysis
+#  @param check Producer member-check fact containing the key condition
 #  @param key Mapping key being tracked
 #  @param function Indexed source function under analysis
-#  @return Boolean indicating whether the requested condition holds
+#  @return Whether the condition applies, or None if it cannot be established
 def key_condition_applies(check, key, function):
     conditions = check.get('key_conditions', ())
     if not conditions:
@@ -198,7 +197,7 @@ def key_condition_applies(check, key, function):
 #  @param function Indexed source function under analysis
 #  @param summary Producer summary for the current function
 #  @param fact Producer fact being validated or interpreted
-#  @return Boolean indicating whether the requested condition holds
+#  @return Whether the member-check fact satisfies all required source premises
 def _member_check_valid(context, analysis, function, summary, fact):
     if not isinstance(fact, dict):
         return False
@@ -280,7 +279,7 @@ def _member_check_valid(context, analysis, function, summary, fact):
 #  @param context Reusable analysis context for the selected source snapshot
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param function Indexed source function under analysis
-#  @return Result of the `member_checks` operation
+#  @return List of validated member-check facts, or an empty list if unavailable
 def member_checks(context, analysis, function):
     summaries = [item for item in analysis.functions
                  if identity_from_target(item.get('function')) == function.identity]

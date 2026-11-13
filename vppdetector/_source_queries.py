@@ -2,8 +2,6 @@
 #  Reuse context-local syntax queries under content and decoding checks.
 #  在校验源码内容和解码策略后复用上下文内的语法查询。
 
-"""Context-local syntax queries with content and decoding-policy isolation."""
-
 from __future__ import annotations
 
 import ast
@@ -26,7 +24,7 @@ class SourceStructure:
     ## Return the cached nodes from one AST traversal
     ## 返回一次AST遍历缓存的节点
     #
-    #  @return Result of the `walk` operation
+    #  @return Tuple of nodes in the cached AST traversal
     def walk(self):
         if not self._nodes:
 
@@ -38,7 +36,7 @@ class SourceStructure:
     ## Return the parent node for each cached AST child
     ## 返回缓存AST子节点对应的父节点
     #
-    #  @return Result of the `parents` operation
+    #  @return Mapping from each child node to its parent
     def parents(self):
         if not self._parents:
             self._parents = {child: parent for parent in self.walk()
@@ -49,7 +47,7 @@ class SourceStructure:
     ## 仅在方法名和源码行号唯一时解析该方法
     #
     #  @param identity Source-level identity used for lookup
-    #  @return Result of the `method` operation
+    #  @return Unique matching function node, or None if absent or ambiguous
     def method(self, identity):
         if self._methods is None:
             self._methods = {}
@@ -63,14 +61,14 @@ class SourceStructure:
         return matches[0] if len(matches) == 1 else None
 
 
+## Reuse syntax, never semantic verdicts; reread before every cache lookup.
+#
+#  复用语法而非语义结论，每次查询缓存前重新读取。
 class SourceQueries:
-    """Reuse syntax, never semantic verdicts; reread before every cache lookup."""
-
     ## Initialize the object state required by the enclosing class
     ## 初始化所属类所需的对象状态
     #
-    #  @param source_store Content-validating store for parsed source documents
-    #  @return None
+    #  @param source_store Optional validating store; files are read directly when absent
     def __init__(self, source_store=None):
         self._versions = {}
         self._source_store = source_store
@@ -80,7 +78,7 @@ class SourceQueries:
     #
     #  @param path Filesystem path of the source being read or checked
     #  @param policy Source decoding and parsing policy
-    #  @return Result of the `structure` operation
+    #  @return SourceStructure for the current text, or None if reading or parsing fails
     def structure(self, path, policy):
         key = str(path), policy
         try:
@@ -120,7 +118,7 @@ class SourceQueries:
     #
     #  @param path Filesystem path of the source being read or checked
     #  @param identity Source-level identity used for lookup
-    #  @return Result of the `method` operation
+    #  @return Unique matching function node, or None if source or match is unavailable
     def method(self, path, identity):
         structure = self.structure(path, 'utf-8-sig')
         if structure is None:

@@ -1,8 +1,6 @@
 ## @package vppdetector._attribute_retention
-#  Validate observed instance-attribute retention facts.
-#  校验实例属性保留相关的运行观测事实。
-
-"""Validate independent instance-retention observations against source stores."""
+#  Validate independent instance-retention observations against source stores.
+#  依据源码存储校验独立的实例属性保留观察。
 
 from __future__ import annotations
 
@@ -23,8 +21,8 @@ from .models import FunctionIdentity, SourceSpan
 #  @param entry Resolved source entry for the requested API
 #  @param call Original client call or its call-specific evidence
 #  @param change Description of the removed or renamed parameter
-#  @param original Value named `original` supplied by the enclosing analysis
-#  @return Result of the `attribute_retention` operation
+#  @param original Original argument value to match against the observation
+#  @return Matching source retention fact, or None if the proof is incomplete
 def attribute_retention(context, entry, call, change, original):
     if len(call.observed_attribute_retentions) != 1:
         return None

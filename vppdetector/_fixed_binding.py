@@ -2,8 +2,6 @@
 #  Validate observed binding against source calls and signatures.
 #  根据源码调用与签名校验运行时绑定观测。
 
-"""Validate actual method binding using neutral PCResolve source calls and signatures."""
-
 from __future__ import annotations
 
 import ast
@@ -23,8 +21,8 @@ from .models import FunctionIdentity, SourceSpan
 #  @param entry Resolved source entry for the requested API
 #  @param call Original client call or its call-specific evidence
 #  @param change Description of the removed or renamed parameter
-#  @param original Value named `original` supplied by the enclosing analysis
-#  @return Result of the `fixed_binding` operation
+#  @param original Original argument value to match against the observation
+#  @return Bound target, or None if the binding cannot be established
 def fixed_binding(context, entry, call, change, original):
     if len(call.observed_fixed_bindings) != 1:
         return None

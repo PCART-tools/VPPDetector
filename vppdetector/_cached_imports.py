@@ -1,8 +1,6 @@
 ## @package vppdetector._cached_imports
-#  Validate source evidence for cached imports.
-#  校验缓存导入相关的源码证据。
-
-"""Match source cached-import facts; availability and cache premises stay explicit."""
+#  Match cached-import source facts with explicit availability and cache premises.
+#  匹配缓存导入源码事实，明确记录可用性与缓存前提。
 
 from __future__ import annotations
 
@@ -19,8 +17,8 @@ from ._program_facts import identity_from_target
 #
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param function Indexed source function under analysis
-#  @param statement Value named `statement` supplied by the enclosing analysis
-#  @return Result of the `cached_import_binding` operation
+#  @param statement ImportFrom AST statement whose binding is queried
+#  @return Matching cached-import binding record, or None if evidence is insufficient
 def cached_import_binding(analysis, function, statement):
     if (not isinstance(statement, ast.ImportFrom) or statement.level
             or not statement.module or any(alias.name == '*' for alias in statement.names)):
@@ -76,8 +74,8 @@ def cached_import_binding(analysis, function, statement):
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param function Indexed source function under analysis
 #  @param fact Producer fact being validated or interpreted
-#  @param effect Value named `effect` supplied by the enclosing analysis
-#  @return Result of the `decorator_import_binding` operation
+#  @param effect Decorator effect containing the import binding to validate
+#  @return Validated import binding record, or None if evidence is insufficient
 def decorator_import_binding(context, analysis, function, fact, effect):
     record = effect.get('binding')
     if not isinstance(record, dict):

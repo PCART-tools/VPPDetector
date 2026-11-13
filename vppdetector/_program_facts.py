@@ -1,8 +1,6 @@
 ## @package vppdetector._program_facts
-#  Shared source-matched fact readers for analysis consumers.
-#  为分析消费者提供共享且与源码位置匹配的事实读取器。
-
-"""Shared source-matched fact readers; domain policy stays with each consumer."""
+#  Read shared source-matched facts while leaving domain policy to consumers.
+#  读取共享的源码匹配事实，将领域策略留给各消费方。
 
 from __future__ import annotations
 
@@ -15,12 +13,12 @@ from ._creation_metadata import _observer, creation_metadata_premises
 from .models import FunctionIdentity, SourceSpan
 
 
-## Use shared relay facts, retaining a diagnostic fallback for older dependencies
-## 读取共享relay事实，并为旧版依赖保留诊断回退
+## Read transitive captures, falling back to direct scope captures on older dependencies
+## 读取传递捕获名称；旧版依赖仅提供直接作用域捕获作为回退
 #
-#  @param node AST node or source expression being analyzed
-#  @param enclosing Value named `enclosing` supplied by the enclosing analysis
-#  @return Result of the `capture_names` operation
+#  @param node Function definition AST whose captures are queried
+#  @param enclosing Names available in enclosing scopes
+#  @return Captured names reported by the available PCResolve scope analysis
 def capture_names(node, enclosing):
     try:
         from pcresolve.scope_facts import transitive_captured_names
@@ -34,8 +32,8 @@ def capture_names(node, enclosing):
 ## A synchronous named function call executes its body only if it is not a generator
 ## 确认同步具名函数调用会执行函数体且不是生成器
 #
-#  @param node AST node or source expression being analyzed
-#  @return Result of the `immediate_body` operation
+#  @param node Function definition AST to check for deferred execution
+#  @return Whether this is a synchronous function without a yield in its body
 def immediate_body(node):
     if not isinstance(node, ast.FunctionDef):
         return False
@@ -53,8 +51,8 @@ def immediate_body(node):
 ## 校验生产者提供的bool模型及其精确输入义务
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of the `scalar_truth_protocol` operation
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated bool protocol fact, or None if the evidence does not match
 def scalar_truth_protocol(analysis, call):
     fact = getattr(call, 'implicit_protocol', {})
     if (not isinstance(fact, dict) or fact.get('kind') != 'builtin_scalar_truth'
@@ -84,8 +82,8 @@ def scalar_truth_protocol(analysis, call):
 ## 仅对精确的非可调用内建输入读取callable事实
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of the `exact_callability_protocol` operation
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated callable protocol fact, or None if the evidence does not match
 def exact_callability_protocol(analysis, call):
     fact = getattr(call, 'implicit_protocol', {})
     if (not isinstance(fact, dict) or fact.get('kind') != 'builtin_exact_callability'
@@ -118,8 +116,8 @@ def exact_callability_protocol(analysis, call):
 ## 读取长度检查义务，并要求消费者确认精确输入类型
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of the `container_length_protocol` operation
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated len protocol fact, or None if the evidence does not match
 def container_length_protocol(analysis, call):
     fact = getattr(call, 'implicit_protocol', {})
     if (not isinstance(fact, dict) or fact.get('kind') != 'builtin_container_length'
@@ -149,8 +147,8 @@ def container_length_protocol(analysis, call):
 ## 读取词法API引用，不将其提升为运行时属性绑定证明
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param requested Value named `requested` supplied by the enclosing analysis
-#  @return Result of the `source_alias_entry` operation
+#  @param requested Source identity requested by the consumer
+#  @return Validated source alias fact, or None when the proof does not match
 def source_alias_entry(analysis, requested):
     fact = analysis.inputs.get('entry_alias', {})
     if not isinstance(fact, dict):
@@ -213,11 +211,11 @@ def source_alias_entry(analysis, requested):
     return fact
 
 
-## Read a validated source location from a producer record
-## 从生产者记录中读取经过校验的源码位置
+## Read source coordinates from a producer record
+## 从生产者记录中读取源码坐标
 #
-#  @param value Value or producer record being interpreted
-#  @return Result of the `_location` operation
+#  @param value Producer source-coordinate record
+#  @return Four source coordinates; missing record fields appear as None
 def _location(value):
     return tuple(value.get(name) for name in (
         'lineno', 'col_offset', 'end_lineno', 'end_col_offset',
@@ -227,17 +225,17 @@ def _location(value):
 ## Read the source location attached to an AST node
 ## 读取AST节点上的源码位置
 #
-#  @param node AST node or source expression being analyzed
-#  @return Result of the `_node_location` operation
+#  @param node AST node supplying the source coordinates
+#  @return Node start and end line and column coordinates
 def _node_location(node):
     return (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
 
 
-## Evaluate supported expression forms without executing source code
-## 解释受支持的表达式形式而不执行源码
+## Parse a bounded expression without executing source code
+## 在不执行源码的情况下解析有界表达式
 #
 #  @param text Source or expression text to parse or compare
-#  @return Result of the `_expression` operation
+#  @return Expression AST node, or None if parsing fails or size limits are exceeded
 def _expression(text):
     if not isinstance(text, str) or len(text) > 4096:
         return None
@@ -251,11 +249,11 @@ def _expression(text):
 ## Check an exact copy edge, its output object and its indexed source witness
 ## 校验精确复制边、输出对象及对应的源码索引见证
 #
-#  @param owner Source identity that owns the queried behavior
+#  @param owner Indexed source function containing the copy call
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @param value Value or producer record being interpreted
-#  @return Result of type `Optional[FunctionIdentity]`
+#  @param call PCResolve producer call record being analyzed
+#  @param value Producer returned-object record to validate
+#  @return Validated builtin-copy protocol target, or None if the evidence is incomplete
 def copy_protocol_target(owner, analysis, call, value):
     obj = value.get('container_object', {})
     results = call.result_sources
@@ -324,12 +322,12 @@ def copy_protocol_target(owner, analysis, call, value):
 ## Validate bounded PCResolve facts for exact builtin mapping operations
 ## 校验针对内建映射操作的有界PCResolve事实
 #
-#  @param owner Source identity that owns the queried behavior
+#  @param owner Indexed source function containing the mapping operation
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
+#  @param call PCResolve producer call record being analyzed
 #  @param operation Operation or effect being validated
-#  @param key Mapping key being tracked
-#  @return Result of type `bool`
+#  @param key Optional mapping key checked by the selected operation
+#  @return Whether the call satisfies the requested mapping operation proof
 def mapping_protocol(owner, analysis, call, operation, key=None):
     if (operation not in ('clear', 'get', 'setdefault')
             or analysis.inputs.get('conditional_source_state')
@@ -368,8 +366,8 @@ def mapping_protocol(owner, analysis, call, operation, key=None):
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param evidence Value named `evidence` supplied by the enclosing analysis
-    #  @return Result of the `witness` operation
+    #  @param evidence Producer source witness for the call expression
+    #  @return Whether the witness matches the current call syntax and location
     def witness(evidence):
         parsed = _expression(evidence.get('source_text')) if isinstance(evidence, dict) else None
         return (isinstance(parsed, ast.Call) and ast.dump(parsed) == ast.dump(node)
@@ -413,8 +411,8 @@ def mapping_protocol(owner, analysis, call, operation, key=None):
         ## Validate the source witness that binds a call receiver
         ## 校验绑定调用接收者的源码见证
         #
-        #  @param evidence Value named `evidence` supplied by the enclosing analysis
-        #  @return Result of the `receiver_witness` operation
+        #  @param evidence Producer source witness for the receiver parameter
+        #  @return Whether the witness matches the parameter name and location
         def receiver_witness(evidence):
             parsed = (_expression(evidence.get('source_text'))
                       if isinstance(evidence, dict) else None)
@@ -481,9 +479,9 @@ def mapping_protocol(owner, analysis, call, operation, key=None):
 ## Evaluate only a finite, source-literal truth value
 ## 仅求有限源码字面量的真假值
 #
-#  @param node AST node or source expression being analyzed
+#  @param node Source expression AST whose truth is queried
 #  @param depth Current recursive or structural analysis depth
-#  @return Result of the `_constant_truth` operation
+#  @return Known truth value, or None if the expression is unsupported
 def _constant_truth(node, depth=0):
     if depth > 16:
         return None
@@ -508,8 +506,8 @@ def _constant_truth(node, depth=0):
 ## 仅在匹配的常量源码条件相矛盾时剪除分支
 #
 #  @param context Reusable analysis context for the selected source snapshot
-#  @param value Value or producer record being interpreted
-#  @return Result of type `bool`
+#  @param value Producer value record whose path conditions are checked
+#  @return Whether recorded conditions remain possible under known source constants
 def conditions_possible(context, value):
     for condition in value.get('conditions', ()):
         branch = condition.get('branch')
@@ -543,14 +541,14 @@ def conditions_possible(context, value):
 ## 将生产者目标记录转换为函数身份
 #
 #  @param target Producer target record or selected source target
-#  @return Result of type `FunctionIdentity`
+#  @return FunctionIdentity assembled from the target fields
 def identity_from_target(target):
     ## Read one identity field from a producer record
     ## 从生产者记录读取一个身份字段
     #
     #  @param name Name to match or validate in the current scope
-    #  @param default Input value of type `Any`
-    #  @return Result of type `Any`
+    #  @param default Fallback when the record or object lacks the requested field
+    #  @return The field value or its fallback
     def value(name, default):
         if isinstance(target, dict):
             return target.get(name, default)
@@ -565,11 +563,11 @@ def identity_from_target(target):
     )
 
 
-## Return valid function identities from the call candidate records
-## 从调用候选记录中返回有效函数身份
+## Convert and deduplicate function identities from call candidate records
+## 转换并去重调用候选记录中的函数身份
 #
-#  @param call Original client call or its call-specific evidence
-#  @return Result of type `tuple[FunctionIdentity, ...]`
+#  @param call PCResolve producer call record being analyzed
+#  @return Tuple of distinct converted candidate identities
 def candidate_identities(call):
     result = []
     for candidate in getattr(call, "target_candidates", ()):
@@ -584,7 +582,7 @@ def candidate_identities(call):
 #
 #  @param analysis PCResolve analysis result being validated or consumed
 #  @param caller Source identity of the calling function
-#  @return Result of type `Iterable[Any]`
+#  @return Iterator over producer call records owned by the selected function
 def direct_calls(analysis, caller):
     for call in analysis.calls:
         owner = identity_from_target(call.caller)
@@ -597,11 +595,11 @@ def direct_calls(analysis, caller):
             yield call
 
 
-## Build a validated source span for one PCResolve call fact
-## 为一条PCResolve调用事实构建经过校验的源码范围
+## Build a source span from one PCResolve call fact
+## 根据一条 PCResolve 调用事实构建源码范围
 #
-#  @param call Original client call or its call-specific evidence
-#  @return Result of type `SourceSpan`
+#  @param call PCResolve producer call record being analyzed
+#  @return Source span using the call's recorded coordinates
 def call_span(call):
     return SourceSpan(
         file_path=Path(call.caller.file_path or ""),
@@ -616,8 +614,8 @@ def call_span(call):
 ## 判定生产者对调用目标的解析状态
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of type `str`
+#  @param call PCResolve producer call record being analyzed
+#  @return Producer target status, adjusted for conditional or dynamic boundaries
 def target_status(analysis, call):
     if getattr(call, 'conditional_source_bindings', ()):
         return 'conditional_source_candidate'
@@ -637,8 +635,8 @@ def target_status(analysis, call):
 ## 校验读取类名所需的源码前提
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param effect Input value of type `dict`
-#  @return Result of type `bool`
+#  @param effect Producer class-name effect containing the source premises
+#  @return Whether the class-name read premises are supported
 def _class_name_premise(analysis, effect):
     basis = effect.get("name_basis")
     if basis is None:
@@ -685,8 +683,8 @@ def _class_name_premise(analysis, effect):
 ## 校验读取类命名空间所需的源码证据
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param effect Input value of type `dict`
-#  @return Result of type `bool`
+#  @param effect Producer class-namespace effect containing the read premises
+#  @return Whether the class-namespace read premises are supported
 def _class_read_premises(analysis, effect):
     basis = effect.get("read_basis")
     if basis is None:
@@ -748,9 +746,9 @@ def _class_read_premises(analysis, effect):
 ## 检查调用涉及的源码类查找是否保持不变
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @param binding Input value of type `dict`
-#  @return Result of type `bool`
+#  @param call PCResolve producer call record being analyzed
+#  @param binding Producer class binding whose lookup effects are checked
+#  @return Whether the recorded class lookup is preserved
 def _class_lookup_preserved(analysis, call, binding):
     observed = []
     for value in call.receiver_sources:
@@ -807,8 +805,8 @@ def _class_lookup_preserved(analysis, call, binding):
 ## 读取绑定到当前调用及全部输入上下文的类方法证明
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of type `Optional[dict]`
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated source classmethod binding, or None if the proof is incomplete
 def source_classmethod_binding(analysis, call):
     if (analysis.inputs.get('conditional_source_state')
             or getattr(call, 'conditional_source_bindings', ())):
@@ -856,8 +854,8 @@ def source_classmethod_binding(analysis, call):
 ## 读取显式查找要求，但不将其提升为绑定证明
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of type `Optional[dict]`
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated conditional source binding, or None if unavailable or conflicting
 def conditional_source_binding(analysis, call):
     facts = getattr(call, 'conditional_source_bindings', ())
     if (analysis.inputs.get('conditional_source_state') is not True
@@ -914,8 +912,8 @@ def conditional_source_binding(analysis, call):
 ## 读取条件性签名引用；该事实不授权执行函数体
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of type `Optional[dict]`
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated conditional constructor signature fact, or None if unproven
 def conditional_constructor_signature(analysis, call):
     facts = getattr(call, 'conditional_source_bindings', ())
     ordinary = getattr(call, 'constructor_bindings', ())
@@ -1004,8 +1002,8 @@ def conditional_constructor_signature(analysis, call):
 ## Reject opposite outcomes of the same recorded source test
 ## 拒绝同一源码条件记录中相互矛盾的结果
 #
-#  @param conditions Value named `conditions` supplied by the enclosing analysis
-#  @return Result of type `bool`
+#  @param conditions Producer branch-condition records to check
+#  @return Whether the recorded conditions contain no contradictory branch outcomes
 def consistent_conditions(conditions):
     seen = {}
     for condition in conditions:
@@ -1025,10 +1023,10 @@ def consistent_conditions(conditions):
 ## 将单个候选路径的谓词与其他接收者候选分开保存
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @param target Producer target record or selected source target
+#  @param call PCResolve producer call record being analyzed
+#  @param target Source identity of the selected candidate target
 #  @param flow Producer data-flow record being checked
-#  @return Result of the `conditional_path_conditions` operation
+#  @return Tuple of consistent conditions, or None if candidate paths cannot be matched
 def conditional_path_conditions(analysis, call, target, flow):
     if analysis.inputs.get('conditional_source_state') is not True:
         return ()
@@ -1084,9 +1082,9 @@ def conditional_path_conditions(analysis, call, target, flow):
 ## Validate method-binding premises during source class creation
 ## 校验源码类创建期间的方法绑定前提
 #
-#  @param hook Input value of type `dict`
-#  @param binding Input value of type `dict`
-#  @return Result of type `bool`
+#  @param hook Producer class-creation hook fact
+#  @param binding Producer class binding containing the receiver hierarchy
+#  @return Whether source method-binding premises are supported
 def _creation_method_premises(hook, binding):
     calls = hook.get('method_calls')
     claimed = 'source_class_creation_call_graph' in hook.get('assumptions', ())
@@ -1095,11 +1093,11 @@ def _creation_method_premises(hook, binding):
     if not claimed or not isinstance(calls, (list, tuple)) or not 1 <= len(calls) <= 256:
         return False
 
-    ## Read the source identity used by the enclosing proof
-    ## 读取所属证明使用的源码身份
+    ## Validate a source identity used by the enclosing proof
+    ## 校验所属证明使用的源码身份
     #
-    #  @param value Value or producer record being interpreted
-    #  @return Result of the `identity` operation
+    #  @param value Producer source identity record to validate
+    #  @return Source identity tuple, or None if required fields or source hashes are invalid
     def identity(value):
         if (not isinstance(value, dict)
                 or any(not isinstance(value.get(key), str) or not value[key]
@@ -1112,10 +1110,10 @@ def _creation_method_premises(hook, binding):
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param value Value or producer record being interpreted
-    #  @param owner Source identity that owns the queried behavior
-    #  @param declaration Value named `declaration` supplied by the enclosing analysis
-    #  @return Result of the `witness` operation
+    #  @param value Producer source witness record to validate
+    #  @param owner Source owner tuple whose file and coordinates constrain the witness
+    #  @param declaration Whether the witness must start on the owner's declaration line
+    #  @return Whether the witness is a valid source span for the owner
     def witness(value, owner, declaration=False):
         return (isinstance(value, dict) and value.get('file_path') == owner[2]
                 and all(type(value.get(key)) is int and value[key] >= 0
@@ -1163,8 +1161,8 @@ def _creation_method_premises(hook, binding):
     ## Traverse one producer dependency node and validate its source evidence
     ## 遍历一个生产者依赖节点并校验其源码证据
     #
-    #  @param vertex Value named `vertex` supplied by the enclosing analysis
-    #  @return Result of the `visit` operation
+    #  @param vertex Source method identity to traverse in the call graph
+    #  @return Whether the reachable subgraph is acyclic
     def visit(vertex):
         if vertex in active:
             return False
@@ -1183,9 +1181,9 @@ def _creation_method_premises(hook, binding):
 ## Validate metadata-query premises during source class creation
 ## 校验源码类创建期间的元数据查询前提
 #
-#  @param hook Input value of type `dict`
+#  @param hook Producer class-creation hook fact
 #  @param supporting Supporting source records referenced by facts
-#  @return Result of type `bool`
+#  @return Whether native metadata-query premises are supported
 def _creation_query_premises(hook, supporting):
     queries = hook.get('native_type_queries')
     claimed = 'source_class_creation_native_queries' in hook.get('assumptions', ())
@@ -1207,11 +1205,11 @@ def _creation_query_premises(hook, supporting):
         'no_unmodeled_indirect_function_mutation', 'no_unmodeled_indirect_module_mutation'}
     seen = set()
 
-    ## Read the source identity used by the enclosing proof
-    ## 读取所属证明使用的源码身份
+    ## Validate a source identity used by the enclosing proof
+    ## 校验所属证明使用的源码身份
     #
-    #  @param value Value or producer record being interpreted
-    #  @return Result of the `identity` operation
+    #  @param value Producer source identity record to validate
+    #  @return Whether the identity fields and source path are valid
     def identity(value):
         return (isinstance(value, dict)
                 and all(isinstance(value.get(key), str) and value[key]
@@ -1222,9 +1220,9 @@ def _creation_query_premises(hook, supporting):
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param value Value or producer record being interpreted
-    #  @param owner Source identity that owns the queried behavior
-    #  @return Result of the `witness` operation
+    #  @param value Producer source witness record to validate
+    #  @param owner Optional source owner whose file and coordinates constrain the witness
+    #  @return Whether the source span matches an available file and optional owner
     def witness(value, owner=None):
         return (isinstance(value, dict) and isinstance(value.get('file_path'), str)
                 and value['file_path'] in hashes
@@ -1363,10 +1361,10 @@ def _creation_query_premises(hook, supporting):
 ## 仅消费有界的类成员元数据查询
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param binding Input value of type `dict`
-#  @param hook Input value of type `dict`
-#  @param hook_index Input value of type `int`
-#  @return Result of type `bool`
+#  @param binding Producer class binding containing creation evidence
+#  @param hook Producer class-creation hook fact to validate
+#  @param hook_index Index of the hook in the binding's creation sequence
+#  @return Whether the bounded class-member metadata-query premises are supported
 def _class_creation_metadata_queries_premises(
     analysis, binding, hook, hook_index,
 ):
@@ -1403,8 +1401,8 @@ def _class_creation_metadata_queries_premises(
     ## Read the source identity used by the enclosing proof
     ## 读取所属证明使用的源码身份
     #
-    #  @param value Value or producer record being interpreted
-    #  @return Result of the `identity` operation
+    #  @param value Producer source identity record to validate
+    #  @return Whether the identity fields and source path are valid
     def identity(value):
         return (isinstance(value, dict)
                 and all(isinstance(value.get(key), str) and value[key]
@@ -1415,8 +1413,8 @@ def _class_creation_metadata_queries_premises(
     ## Validate the source reference attached to the producer record
     ## 校验生产者记录附带的源码引用
     #
-    #  @param value Value or producer record being interpreted
-    #  @return Result of the `source_reference` operation
+    #  @param value Producer source reference record to validate
+    #  @return Whether the source reference has valid fields and an available file
     def source_reference(value):
         return (isinstance(value, dict)
                 and all(isinstance(value.get(key), str) and value[key]
@@ -1427,8 +1425,8 @@ def _class_creation_metadata_queries_premises(
     ## Check source hashes against the current indexed snapshot
     ## 将源码哈希与当前索引快照核对
     #
-    #  @param value Value or producer record being interpreted
-    #  @return Result of the `hashes_match` operation
+    #  @param value Producer fact containing source hashes to compare
+    #  @return Whether all recorded source hashes match the available snapshot
     def hashes_match(value):
         hashes = value.get('source_hashes') if isinstance(value, dict) else None
         return (isinstance(hashes, dict) and bool(hashes)
@@ -1438,9 +1436,9 @@ def _class_creation_metadata_queries_premises(
     ## Validate the producer witness required by the enclosing proof
     ## 校验所属证明所需的生产者见证
     #
-    #  @param value Value or producer record being interpreted
-    #  @param owner Source identity that owns the queried behavior
-    #  @return Result of the `witness` operation
+    #  @param value Producer source witness record to validate
+    #  @param owner Optional source owner whose file and coordinates constrain the witness
+    #  @return Whether the source span matches an available file and optional owner
     def witness(value, owner=None):
         return (isinstance(value, dict) and value.get('file_path') in available
                 and (owner is None or value.get('file_path') == owner.get('file_path'))
@@ -1451,8 +1449,8 @@ def _class_creation_metadata_queries_premises(
     ## Check that the recorded assumptions match the supported proof
     ## 检查记录的假设是否符合受支持的证明
     #
-    #  @param value Value or producer record being interpreted
-    #  @return Result of the `assumptions_match` operation
+    #  @param value Producer fact containing assumptions to validate
+    #  @return Whether the recorded assumptions are a subset of the supported claims
     def assumptions_match(value):
         assumptions = value.get('assumptions') if isinstance(value, dict) else None
         return (isinstance(assumptions, (list, tuple))
@@ -1463,8 +1461,8 @@ def _class_creation_metadata_queries_premises(
     ## 校验模块初始化时的源码成员元数据写入
     #
     #  @param fact Producer fact being validated or interpreted
-    #  @param target Producer target record or selected source target
-    #  @param attribute Attribute name being resolved
+    #  @param target Optional producer target record to match
+    #  @param attribute Optional attribute name to match
     #  @return Whether the fact proves the requested metadata write
     def module_initialized_member_metadata(fact, target=None, attribute=None):
         if (not isinstance(fact, dict)
@@ -1489,9 +1487,9 @@ def _class_creation_metadata_queries_premises(
     ## Check private attribute projections against their source premises
     ## 根据源码前提核对私有属性投影
     #
-    #  @param entry Resolved source entry for the requested API
+    #  @param entry Producer metadata record containing private query results
     #  @param parent_assumptions Assumptions provided by the enclosing analysis
-    #  @return Result of the `private_projections_match` operation
+    #  @return Whether the recorded private projections satisfy their source premises
     def private_projections_match(entry, parent_assumptions):
         projections = entry.get('private_query_results')
         if (not isinstance(projections, (list, tuple)) or not 1 <= len(projections) <= 256
@@ -1744,8 +1742,8 @@ def _class_creation_metadata_queries_premises(
 ## 校验类创建钩子的源码及绑定前提
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param binding Input value of type `dict`
-#  @return Result of type `bool`
+#  @param binding Producer class binding containing creation hooks
+#  @return Whether the recorded class-creation hook premises are supported
 def _creation_hook_premises(analysis, binding):
     hooks = binding.get('class_creation_hooks')
     claims = binding.get('assumptions', ())
@@ -1829,8 +1827,8 @@ def _creation_hook_premises(analysis, binding):
 ## 单独验证类查询绑定，不将其视作调用点证明
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param requested Input value of type `FunctionIdentity`
-#  @return Result of type `Optional[dict]`
+#  @param requested Source identity of the class being queried
+#  @return Validated constructor entry fact, or None if the query binding is unproven
 def source_constructor_entry_binding(analysis, requested):
     fact = analysis.inputs.get("entry_binding")
     if not isinstance(fact, dict):
@@ -1891,8 +1889,8 @@ def source_constructor_entry_binding(analysis, requested):
 ## 读取源码构造调用证明，不据此推断实例初始化后的状态
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @return Result of type `Optional[dict]`
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated constructor call fact, or None if the call binding is unproven
 def source_constructor_binding(analysis, call):
     if analysis.inputs.get('conditional_source_state'):
         return None
@@ -1961,17 +1959,18 @@ def source_constructor_binding(analysis, call):
     return binding if valid else None
 
 
+## A neutral view of one producer edge; optional semantics stay unproved.
+#
+#  单条生产者边的中立视图；可选语义仍未证明。
 @dataclass(frozen=True)
 class CallFacts:
-    """A neutral view of one producer edge; optional semantics stay unproved."""
-
     analysis: Any
     call: Any
 
     ## Report whether the call has a complete argument binding
     ## 报告调用是否具有完整实参绑定
     #
-    #  @return Result of the `complete_binding` operation
+    #  @return Whether binding is complete and has no reported issues
     @property
     def complete_binding(self):
         return self.call.binding_status == "complete" and not self.call.binding_issues
@@ -1979,7 +1978,7 @@ class CallFacts:
     ## Return the call binding status
     ## 返回调用绑定状态
     #
-    #  @return Result of the `status` operation
+    #  @return Target resolution status for the call
     @property
     def status(self):
         return target_status(self.analysis, self.call)
@@ -1987,7 +1986,7 @@ class CallFacts:
     ## Return analysis boundaries attached to the call
     ## 返回该调用关联的分析边界
     #
-    #  @return Result of the `boundaries` operation
+    #  @return Tuple of analysis boundaries associated with this call
     @property
     def boundaries(self):
         return tuple(b for b in self.analysis.boundaries if b.get("call_id") == self.call.id)
@@ -1997,9 +1996,9 @@ class CallFacts:
 ## 仅接纳生产者有限受影响键集合之外的当前映射项
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @param value Value or producer record being interpreted
-#  @return Result of the `preserved_mapping_remainder` operation
+#  @param call PCResolve producer call record being analyzed
+#  @param value Producer returned-mapping value record to validate
+#  @return Whether the value is covered by a proven unaffected mapping remainder
 def preserved_mapping_remainder(analysis, call, value):
     if (call.analysis_status != 'analyzed' or target_status(analysis, call) != 'resolved'
             or call.target is None or not CallFacts(analysis, call).complete_binding

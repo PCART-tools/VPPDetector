@@ -1,8 +1,6 @@
 ## @package vppdetector._capture_rejection
-#  Validate source guards that reject captured keyword arguments.
-#  校验拒绝已捕获关键字参数的源码守卫。
-
-"""Validate actual nonempty-dictionary rejection against neutral source guards."""
+#  Validate actual nonempty-dictionary rejection against source guards.
+#  依据源码守卫校验实际发生的非空字典拒绝。
 
 from __future__ import annotations
 
@@ -16,12 +14,12 @@ from ._program_facts import identity_from_target
 from .models import FunctionIdentity, SourceSpan
 
 
-## Convert source coordinates into a validated source span
-## 将源码坐标转换为经过校验的源码范围
+## Build a source span record from an AST node and path
+## 根据 AST 节点和路径构建源码范围记录
 #
 #  @param path Filesystem path of the source being read or checked
-#  @param node AST node or source expression being analyzed
-#  @return Result of the `_span` operation
+#  @param node AST node supplying the source coordinates
+#  @return Dictionary containing the file path and node coordinates
 def _span(path, node):
     return dict(file_path=str(path), lineno=node.lineno, col_offset=node.col_offset,
                 end_lineno=node.end_lineno, end_col_offset=node.end_col_offset)
@@ -34,8 +32,8 @@ def _span(path, node):
 #  @param entry Resolved source entry for the requested API
 #  @param call Original client call or its call-specific evidence
 #  @param change Description of the removed or renamed parameter
-#  @param original Value named `original` supplied by the enclosing analysis
-#  @return Result of the `capture_rejection` operation
+#  @param original Original argument value to match against the observation
+#  @return Unique matching guard fact, or None if the proof is incomplete
 def capture_rejection(context, entry, call, change, original):
     if len(call.observed_capture_rejections) != 1:
         return None

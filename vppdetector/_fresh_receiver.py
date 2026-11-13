@@ -1,8 +1,6 @@
 ## @package vppdetector._fresh_receiver
-#  Validate source proofs for fresh-instance lookup.
-#  校验新实例属性查找所需的源码证明。
-
-"""Validate producer proofs for a fresh source instance's lookup prefix."""
+#  Validate producer proofs for the lookup prefix of a fresh source instance.
+#  校验生产者提供的新建源码实例查找前缀证明。
 
 from __future__ import annotations
 
@@ -22,9 +20,9 @@ _FIELDS = ('lineno', 'col_offset', 'end_lineno', 'end_col_offset')
 ## 检查新装饰接收者所需的源码前提
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param entry Resolved source entry for the requested API
+#  @param entry Producer entry-binding fact containing class decorations
 #  @param allocation Producer facts describing object allocation
-#  @return Result of the `_decoration_premises` operation
+#  @return Whether the receiver's class-decoration premises are supported
 def _decoration_premises(analysis, entry, allocation):
     records = entry.get('class_decorations')
     if allocation.get('class_decorations') != records:
@@ -98,11 +96,11 @@ def _decoration_premises(analysis, entry, allocation):
     return True
 
 
-## Determine whether allocation facts show a changed receiver state
-## 判断分配事实是否表明接收者状态发生变化
+## Collect receiver attributes changed by allocation-time class effects
+## 收集分配期间类副作用修改的接收者属性
 #
 #  @param allocation Producer facts describing object allocation
-#  @return Result of the `_changed` operation
+#  @return Set of changed attribute names
 def _changed(allocation):
     return {name for field in ('class_creation_hooks', 'class_decorations')
             for record in allocation.get(field) or () for name in record['attributes']}
@@ -112,9 +110,9 @@ def _changed(allocation):
 ## 将有限的生产者调用序列匹配到新类入口
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param origin Value named `origin` supplied by the enclosing analysis
-#  @param context Reusable analysis context for the selected source snapshot
-#  @return Result of the `origin_binding` operation
+#  @param origin Producer record describing the fresh receiver origin
+#  @param context Optional reusable source analysis context
+#  @return Whether the origin matches the bounded source entry and call sequence
 def origin_binding(analysis, origin, context=None):
     root = analysis.inputs.get('entry_binding', {}).get('fresh_receiver_origin')
     if not isinstance(root, dict) or not isinstance(origin, dict):
@@ -165,9 +163,9 @@ def origin_binding(analysis, origin, context=None):
 ## 消费完整的普通源码绑定及其对象分配来源
 #
 #  @param analysis PCResolve analysis result being validated or consumed
-#  @param call Original client call or its call-specific evidence
-#  @param context Reusable analysis context for the selected source snapshot
-#  @return Result of the `method_binding` operation
+#  @param call PCResolve producer call record being analyzed
+#  @param context Optional reusable source analysis context
+#  @return Validated fresh receiver binding, or None if the proof is incomplete
 def method_binding(analysis, call, context=None):
     bindings = getattr(call, 'instance_method_bindings', ())
     if (analysis.inputs.get('conditional_source_state') or call.target is None
