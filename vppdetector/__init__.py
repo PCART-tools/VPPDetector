@@ -1,4 +1,6 @@
-"""Whole-library and on-demand VPP detection backed by PCResolve facts."""
+## @package vppdetector
+#  Public scan and assess interfaces backed by PCResolve.
+#  基于PCResolve事实提供公开的扫描与评估接口。
 
 from .assessment import assess_change
 from .core import AnalysisContext, ResolutionError
@@ -10,17 +12,26 @@ from .models import (
     ForwardingFinding,
     ForwardingStep,
     FunctionIdentity,
+    ObservedAttributeRetention,
+    ObservedCaptureRejection,
+    ObservedContainerPredicate,
+    ObservedFixedBinding,
+    ObservedKeywordCheck,
+    ObservedNormalReturn,
     ParameterAssessment,
     ParameterChange,
     ParameterEvidence,
     ParameterState,
+    ScanCoverageStatus,
     ScanReport,
     SourceContext,
     SourceSpan,
+    VariadicCoverage,
     VariadicFunction,
     VariadicKind,
 )
 from .scanner import scan_api, scan_package
+
 
 __all__ = [
     "AnalysisBoundary",
@@ -30,15 +41,23 @@ __all__ = [
     "ForwardingFinding",
     "ForwardingStep",
     "FunctionIdentity",
+    "ObservedAttributeRetention",
+    "ObservedCaptureRejection",
+    "ObservedContainerPredicate",
+    "ObservedFixedBinding",
+    "ObservedKeywordCheck",
+    "ObservedNormalReturn",
     "ParameterAssessment",
     "ParameterChange",
     "ParameterEvidence",
     "ParameterState",
     "ResolutionError",
     "ScanReport",
+    "ScanCoverageStatus",
     "SourceContext",
     "SourceSpan",
     "VariadicFunction",
+    "VariadicCoverage",
     "VariadicKind",
     "assess_change",
     "getEncoding",

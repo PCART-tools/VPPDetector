@@ -1,7 +1,8 @@
-"""Original research-prototype scanner retained for reproducibility.
-
-New integrations should import the :mod:`vppdetector` package instead.
-"""
+## @package legacy_vppdetector
+#  Original prototype scanner retained for reproducibility.
+#  为复现早期研究结果而保留的原型扫描器。
+#  New integrations should import the vppdetector package instead.
+#  新集成应改为导入 vppdetector 包。
 
 import os
 import ast
@@ -13,18 +14,40 @@ from Path.getPath import Path
 from multiprocessing import Pool
 from Tool.tool import cmp
 
-#根据位置找定义, 并且不能含有*args或kwargs
-class DefVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.target = False #假设不是满足条件的目标
 
+# 根据位置找定义, 并且不能含有*args或kwargs
+## Check whether a candidate definition accepts the forwarded variadic arguments.
+## 检查候选定义是否接受转发的可变参数实参。
+class DefVisitor(ast.NodeVisitor):
+    ## Initialize the object state required by the enclosing class
+    ## 初始化所属类所需的对象状态
+    #
+    def __init__(self):
+        self.target = False
+
+    ## Set the source line used to locate a candidate definition
+    ## 设置用于定位候选定义的源码行号
+    #
+    #  @param position Original or selected positional index
+    #  @return None
     def setPos(self, position):
         self._position = position
 
+    ## Set which variadic channels the candidate must reject
+    ## 设置候选定义需要拒绝的可变参数通道
+    #
+    #  @param varargFlag Whether positional variadic values are forwarded
+    #  @param kwargFlag Whether keyword variadic values are forwarded
+    #  @return None
     def setFlag(self, varargFlag, kwargFlag):
         self._varargFlag = varargFlag
         self._kwargFlag = kwargFlag
 
+    ## Inspect a class node while resolving the requested definition
+    ## 检查类节点并解析请求的定义
+    #
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_ClassDef(self, node):
         if node.lineno == self._position:
             flag1 = False
@@ -32,13 +55,13 @@ class DefVisitor(ast.NodeVisitor):
             for n in ast.iter_child_nodes(node):
                 if isinstance(n, ast.FunctionDef):
                     if n.name == "__init__":
-                        if self._varargFlag: #如果该函数在调用时被传递了*args，则定义中不能含有*args
+                        if self._varargFlag:
                             try:
                                 n.args.vararg.arg
                             except:
                                 flag1 = True
 
-                        if self._kwargFlag: #如果该函数在调用时被传递了**kwargs，则定义中不能含有**kwargs
+                        if self._kwargFlag:
                             try:
                                 n.args.kwarg.arg
                             except:
@@ -51,18 +74,22 @@ class DefVisitor(ast.NodeVisitor):
         if not self.target:
             self.generic_visit(node)
 
-
+    ## Inspect a function node while collecting matching API facts
+    ## 检查函数节点并收集匹配的API事实
+    #
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_FunctionDef(self, node):
         if node.lineno == self._position:
             flag1 = False
             flag2 = False
-            if self._varargFlag: #如果该函数在调用时被传递了*args，则定义中不能含有*args
+            if self._varargFlag:
                 try:
                     node.args.vararg.arg
                 except:
                     flag1 = True
 
-            if self._kwargFlag: #如果该函数在调用时被传递了**kwargs，则定义中不能含有**kwargs
+            if self._kwargFlag:
                 try:
                     node.args.kwarg.arg
                 except:
@@ -75,26 +102,45 @@ class DefVisitor(ast.NodeVisitor):
             self.generic_visit(node)
 
 
-#寻找调用的API中含有*args或**kwargs的
+# 寻找调用的API中含有*args或**kwargs的
+## Collect source calls that forward a tracked variadic parameter.
+## 收集转发已跟踪可变参数的源码调用。
 class CallVisitor:
+    ## Initialize the object state required by the enclosing class
+    ## 初始化所属类所需的对象状态
+    #
     def __init__(self):
         self.callDict = {}
 
+    ## Clear the accumulated visitor state before the next query
+    ## 在下一次查询前清空访问器累积状态
+    #
+    #  @return None
     def clean(self):
         self.callDict.clear()
 
+    ## Set the variadic parameter names followed by the visitor
+    ## 设置访问器跟踪的可变参数名称
+    #
+    #  @param varargName Name of the tracked positional variadic parameter
+    #  @param kwargName Name of the tracked keyword variadic parameter
+    #  @return None
     def setName(self, varargName, kwargName):
         self._varargName = varargName
         self._kwargName = kwargName
 
+    ## Collect calls that forward the tracked variadic arguments
+    ## 收集转发已跟踪可变参数实参的调用
+    #
+    #  @param node AST node or source expression being analyzed
     def dfsVisit(self, node):
         if isinstance(node, ast.Call):
-            varargFlag = False #假设不存在*args
-            kwargFlag = False #假设不存在**kwargs
+            varargFlag = False
+            kwargFlag = False
             self.callName = ast.unparse(node.func)
             for arg in node.args:
                 paraName = ast.unparse(arg)
-                if paraName == f"*{self._varargName}": #传递的时候必须要带*号
+                if paraName == f"*{self._varargName}":
                     varargFlag = True
                     break
 
@@ -116,54 +162,85 @@ class CallVisitor:
             self.dfsVisit(n)
 
 
-
-#根据函数名来找对应的位置，仅在当前文件中查找, API可能是类，也可能是函数
+# 根据函数名来找对应的位置，仅在当前文件中查找, API可能是类，也可能是函数
+## Locate matching class and function definitions in one source tree.
+## 在单个源码树中定位匹配的类和函数定义。
 class ClassAndFunctionVisitor(ast.NodeVisitor):
+    ## Initialize the object state required by the enclosing class
+    ## 初始化所属类所需的对象状态
+    #
     def __init__(self):
         self.positionLst = []
-        self.noFindFlag = False #判断在当前文件中是否找到同名函数,假设找不到
+        self.noFindFlag = False
 
+    ## Clear the accumulated visitor state before the next query
+    ## 在下一次查询前清空访问器累积状态
+    #
+    #  @return None
     def clean(self):
         self.positionLst.clear()
 
+    ## Set the API name used by subsequent source lookups
+    ## 设置后续源码查找所用的API名称
+    #
+    #  @param name Name to match or validate in the current scope
+    #  @return None
     def setAPIName(self, name):
         self.APIName = name
 
+    ## Inspect a class node while resolving the requested definition
+    ## 检查类节点并解析请求的定义
+    #
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_ClassDef(self, node):
         if node.name == self.APIName:
             self.positionLst.append(node.lineno)
         self.generic_visit(node)
 
-    #从类中找定义的API
+    # 从类中找定义的API
+    ## Collect matching methods from class definitions in the source tree
+    ## 从源码树中的类定义收集匹配方法
+    #
+    #  @param root AST root or source root used for lookup
     def visitClasDef(self, root):
         for node in ast.iter_child_nodes(root):
-            if isinstance(node, ast.ClassDef): #抽取类内API
+            if isinstance(node, ast.ClassDef):
                 for n in ast.iter_child_nodes(node):
                     if isinstance(n, ast.FunctionDef):
                         if n.name == self.APIName:
                             flag = 1
                             for d in n.decorator_list:
-                                if "overload" in ast.unparse(d): #含有overload装饰器的不算
+                                if "overload" in ast.unparse(d):
                                     flag = 0
                                     break
                             if flag:
                                 self.positionLst.append(n.lineno)
 
-    #找普通的API
+    # 找普通的API
+    ## Collect matching module-level function definitions
+    ## 收集匹配的模块级函数定义
+    #
+    #  @param root AST root or source root used for lookup
     def visitFunctionDef(self, root):
         for node in ast.iter_child_nodes(root):
-            if isinstance(node, ast.FunctionDef): #抽取类内API
+            if isinstance(node, ast.FunctionDef):
                 if node.name == self.APIName:
                     flag = 1
                     for d in node.decorator_list:
-                        #若API定义中含有overload装饰器也排除
+
+                        # 若API定义中含有overload装饰器也排除
                         if "overload" in ast.unparse(d):
                             flag = 0
                             break
                     if flag:
                         self.positionLst.append(node.lineno)
 
-
+    ## Inspect a function node while collecting matching API facts
+    ## 检查函数节点并收集匹配的API事实
+    #
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_FunctionDef(self, node):
         if node.name == self.APIName:
             flag = 1
@@ -176,46 +253,75 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-
+## Find variadic functions whose forwarded arguments reach fixed signatures.
+## 查找将可变实参转发到固定签名的可变参数函数。
 class FunctionDefVisitor(ast.NodeVisitor):
+    ## Initialize the object state required by the enclosing class
+    ## 初始化所属类所需的对象状态
+    #
     def __init__(self):
         self.lst = []
-        self.defWithVariadicParaLst = [] #单独保存参数定义中含有可变参数的API
-        self._callVisitor = CallVisitor() #
+        self.defWithVariadicParaLst = []
+        self._callVisitor = CallVisitor()
         self._findAPIPosition = ClassAndFunctionVisitor()
         self._callDefVisitor = DefVisitor()
-        self.cnt1 = 0 #记录函数定义中含有*args或**kwargs的个数
-        self.cnt2 = 0 #记录在内部将其传递给另一个函数的个数
-        self.cnt3 = 0 #记录被传递的函数定义中不含有对应*arg或**kwargs的个数
-        self._classStack = [] #保存类信息
-        self._classNodeStack = [] #保存类节点
+        self.cnt1 = 0
+        self.cnt2 = 0
+        self.cnt3 = 0
+        self._classStack = []
+        self._classNodeStack = []
 
-
+    ## Set the AST root used for source definition lookup
+    ## 设置用于源码定义查找的AST根节点
+    #
+    #  @param root AST root or source root used for lookup
+    #  @return None
     def setRoot(self, root):
         self._root = root
 
-
+    ## Set the module prefix used to qualify discovered APIs
+    ## 设置为发现的API添加限定名所用的模块前缀
+    #
+    #  @param prefix Module prefix used to qualify discovered APIs
+    #  @return None
     def setPrefix(self, prefix):
-        self._prefix =  prefix #记录文件的路径
+        self._prefix =  prefix
 
-
-    def setEvolutionDict(self, evolutionDict): #设置变更字典
+    ## Store the API evolution mapping for this legacy visitor
+    ## 保存旧版访问器使用的API演变映射
+    #
+    #  @param evolutionDict Legacy API evolution mapping
+    #  @return None
+    def setEvolutionDict(self, evolutionDict):
         self._evolutionDict = evolutionDict
 
-
+    ## Clear the accumulated visitor state before the next query
+    ## 在下一次查询前清空访问器累积状态
+    #
+    #  @return None
     def clean(self):
         self._callVisitor.clean()
         self._findAPIPosition.clean()
 
-
+    ## Reset the analysis counters between library versions
+    ## 在不同库版本之间重置分析计数
+    #
+    #  @return None
     def cleanCnt(self):
         self.cnt1 = 0
         self.cnt2 = 0
         self.cnt3 = 0
 
-
+    ## Find source definitions matching a call name in the selected scope
+    ## 在指定作用域中查找与调用名称匹配的源码定义
+    #
+    #  @param callName Qualified expression naming the called API
+    #  @param node AST node or source expression being analyzed
+    #  @param flag Lookup mode selecting the source scope
+    #  @return Copied source positions of matching definitions
     def findCallDef(self, callName, node, flag = 0):
         positionLst = []
+
         # 寻找callAPI定义的位置（可能会找到多个同名的API）
         self._findAPIPosition.setAPIName(callName)
         if flag == 0:
@@ -226,44 +332,62 @@ class FunctionDefVisitor(ast.NodeVisitor):
             self._findAPIPosition.visitFunctionDef(node)
 
         positionLst = copy.deepcopy(self._findAPIPosition.positionLst)
-        self._findAPIPosition.positionLst.clear() #清空
+        self._findAPIPosition.positionLst.clear()
         return positionLst
 
-
+    ## Keep definitions that lack a required variadic parameter channel
+    ## 筛选缺少所需可变参数通道的定义
+    #
+    #  @param positionLst Source positions of candidate definitions
+    #  @param varargFlag Whether positional variadic values are forwarded
+    #  @param kwargFlag Whether keyword variadic values are forwarded
+    #  @return Candidate positions whose definitions lack a required channel
     def findNoKwargCallDef(self, positionLst, varargFlag, kwargFlag):
         ansLst = []
-        #根据位置查找callAPI的定义
+
+        # 根据位置查找callAPI的定义
         self._callDefVisitor.setFlag(varargFlag, kwargFlag)
         for pos in positionLst:
-            self._callDefVisitor.setPos(pos) #设置位置信息
-            self._callDefVisitor.visit(self._root) #根据位置在当前文件中查找
+            self._callDefVisitor.setPos(pos)
+            self._callDefVisitor.visit(self._root)
             if self._callDefVisitor.target:
                 ansLst.append(pos)
                 self._callDefVisitor.target = False
 
         return ansLst
 
-
+    ## Inspect a class node while resolving the requested definition
+    ## 检查类节点并解析请求的定义
+    #
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_ClassDef(self, node):
+
         # 进入一个类定义时，当前类名进栈
         self._classStack.append(node.name)
         self._classNodeStack.append(node)
         self.generic_visit(node)
+
         # 离开类定义时，从栈中弹出类名和类节点
         self._classStack.pop()
         self._classNodeStack.pop()
 
-
+    ## Inspect a function node while collecting matching API facts
+    ## 检查函数节点并收集匹配的API事实
+    #
+    #  @param node AST node or source expression being analyzed
+    #  @return None
     def visit_FunctionDef(self, node):
-        #获取API定义中的参数
+
+        # 获取API定义中的参数
         paraLst = []
         for para in node.args.args + node.args.kwonlyargs:
             paraLst.append(ast.unparse(para))
 
         varargName = ""
         kwargName = ""
-        varargFlag = True #假设有*args
-        kwargFlag = True #假设有**kwargs
+        varargFlag = True
+        kwargFlag = True
         try:
             varargName = node.args.vararg.arg
         except:
@@ -274,7 +398,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
         except:
             kwargFlag = False
 
-        #step1: 找出参数定义中含有可变参数的API
+        # step1: 找出参数定义中含有可变参数的API
         if varargFlag or kwargFlag:
             currentClass = '.'.join(self._classStack) if self._classStack else ""
             if currentClass:
@@ -284,36 +408,41 @@ class FunctionDefVisitor(ast.NodeVisitor):
             self.cnt1 += 1
             self.defWithVariadicParaLst.append({fullPathName: node.lineno})
 
-            #step2: 再从函数体内找被传递*args或**kwargs的调用API
+            # step2: 再从函数体内找被传递*args或**kwargs的调用API
             self._callVisitor.setName(varargName, kwargName)
             self._callVisitor.dfsVisit(node)
             self.cnt2 += len(self._callVisitor.callDict)
             for callName, val in self._callVisitor.callDict.items():
-                #如果调用API来自参数，则跳过
+
+                # 如果调用API来自参数，则跳过
                 if callName in paraLst:
                     continue
 
                 callPos = val[0]
                 varFlag = val[1]
                 kwFlag = val[2]
+
                 # 寻找callName定义的位置
                 if 'self.' in callName:
                     callName = callName.replace("self.", "")
 
                 if len(self._classNodeStack) > 0:
                     tempNode = self._classNodeStack[-1]
-                    #若是通过self进行调用的，则优先在当前类中查找调用函数的定义
+
+                    # 若是通过self进行调用的，则优先在当前类中查找调用函数的定义
                     callDefPosLst = self.findCallDef(callName, tempNode)
 
-                    #若当前类找不到，则再从当前文件进行查找，但也只从类中查找
+                    # 若当前类找不到，则再从当前文件进行查找，但也只从类中查找
                     if len(callDefPosLst) == 0:
                         callDefPosLst = self.findCallDef(callName, self._root, 1)
                 else:
-                    #只查找普通函数
+
+                    # 只查找普通函数
                     callDefPosLst = self.findCallDef(callName, self._root, 2)
 
                 if len(callDefPosLst) > 0:
-                    #再从这些API里筛选出参数定义中不含可变参数的API
+
+                    # 再从这些API里筛选出参数定义中不含可变参数的API
                     callDefNoKwargPosLst = self.findNoKwargCallDef(callDefPosLst, varFlag, kwFlag)
                     if len(callDefNoKwargPosLst):
                         tempDict = {fullPathName: node.lineno, callName: (callPos, str(callDefNoKwargPosLst))}
@@ -321,39 +450,59 @@ class FunctionDefVisitor(ast.NodeVisitor):
                             self.cnt3 += 1
                             self.lst.append(tempDict)
 
-            self.clean()  # 清理
+            self.clean()
 
         self.generic_visit(node)
 
 
 # 获取文件的编码方式
+## Detect the text encoding of a source file
+## 检测源码文件的文本编码
+#
+#  @param filePath Source file path
+#  @return Encoding guessed by chardet, or None when detection is inconclusive
+#  @exception OSError If the source file cannot be read
 def getEncoding(filePath):
+
     # 读取二进制文件内容
     with open(filePath, "rb") as f:
         raw_data = f.read()
+
     # 自动检测文件编码
     result = chardet.detect(raw_data)
     encoding = result['encoding']
     return encoding
 
 
-#libName = torch1.5.1
-#/home/zhang/Packages/Matplotlib/matplotlibxx.xx
+# libName = torch1.5.1
+# /home/zhang/Packages/Matplotlib/matplotlibxx.xx
+## Build the module prefix for a versioned library source path
+## 根据带版本的库源码路径生成模块前缀
+#
+#  @param filePath Source file path
+#  @param libName Configured library name or source-version label
+#  @return Module prefix derived from the library label and source path
 def getPrefix(filePath, libName):
     index=-1
     for i in range(len(libName)):
         if libName[i].isdigit():
             index=i
             break
-    #rstrip在去除的时候是不考虑字符的顺序的，比如"xxxxapi.py".rstrip(',pyi')就会出错
-    #s=filePath.split(f"{projName}")[-1].replace('/','.').rstrip('.pyi').rstrip('.py')
+
+    # rstrip在去除的时候是不考虑字符的顺序的，比如"xxxxapi.py".rstrip(',pyi')就会出错
+    # s=filePath.split(f"{projName}")[-1].replace('/','.').rstrip('.pyi').rstrip('.py')
     s=filePath.split(f"{libName}")[-1].replace('/','.')
-    pos=s.rfind('.') #bug修复2023.9.8
+    pos=s.rfind('.')
     s=s[0:pos]
     prefix=libName[0:index] + s
     return prefix
 
 
+## Return the suffix starting at the first digit in a library name
+## 提取库名称中从第一个数字开始的后缀
+#
+#  @param s Library name or version label
+#  @return Suffix starting at the first digit, or the original string if no digit exists
 def getVersion(s):
     index = 0
     for i, ch in enumerate(s):
@@ -363,29 +512,32 @@ def getVersion(s):
     return  s[index:]
 
 
-
+## Scan library versions and record variadic API definitions and forwarding risks
+## 扫描多个库版本并记录可变参数API定义及转发风险
+#
+#  @param libName Configured library name or source-version label
 def getKwargAPI(libName):
     pathObj1 = Path("D")
-    pathObj1.getPath(f"/home/zhang/Packages/{libName}") #库源码路径
+    pathObj1.getPath(f"/home/zhang/Packages/{libName}")
     libPath = pathObj1.path
     visitor = FunctionDefVisitor()
 
     os.makedirs(f"KWARGS/APIDefWithVariadicPara/{libName}", exist_ok=True)
     os.makedirs(f"KWARGS/VariadicParaPitfalls/{libName}", exist_ok=True)
 
-    cntDict = {} #计数字典，保存所有版本的数据
-    for lib in libPath: #版本库路径
+    cntDict = {}
+    for lib in libPath:
         libNameAndVersion = lib.split('/')[-1]
         dic = {}
         defDict = {}
         pathObj2 = Path("DF")
-        pathObj2.getPath(lib) #获取当前库版本下的所有文件
+        pathObj2.getPath(lib)
         codeFilePath = pathObj2.path
         for codeFile in codeFilePath:
             prefix = getPrefix(codeFile, libNameAndVersion)
             visitor.setPrefix(prefix)
             try:
-                encdoing = getEncoding(codeFile)  # 获取文件编码方式
+                encdoing = getEncoding(codeFile)
                 with open(codeFile, 'r', encoding = encdoing) as fr:
                     codeText = fr.read()
                 root = ast.parse(codeText, filename='<unknown>', mode='exec')
@@ -408,7 +560,7 @@ def getKwargAPI(libName):
                 dic[codeFile] = lst
                 visitor.lst.clear()
 
-        #保存当前版本的情况
+        # 保存当前版本的情况
         fileName = lib.split("/")[-1]
         if len(defDict) > 0:
             with open(f"KWARGS/APIDefWithVariadicPara/{libName}/{fileName}.txt", 'w') as fw:
@@ -418,9 +570,7 @@ def getKwargAPI(libName):
             with open(f"KWARGS/VariadicParaPitfalls/{libName}/{fileName}.txt", 'w') as fw:
                 json.dump(dic, fw, indent=4, ensure_ascii=False)
 
-
-
-        #保存当前版本库的计数
+        # 保存当前版本库的计数
         cntDict[fileName] = (visitor.cnt1, visitor.cnt2, visitor.cnt3)
         visitor.cleanCnt()
 

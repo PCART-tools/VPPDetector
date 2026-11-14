@@ -23,6 +23,9 @@ while `wrapper(allowed=7)` binds the supplied argument to an explicit downstream
 parameter. Assessment examines the selected name or positional element and
 call conditions.
 
+Scan and assessment share program facts, but neither consumes the other's
+conclusion. They retain separate propagation state and depth budgets.
+
 ## Source preparation and program facts
 
 Source indexing derives module names from import roots, collects function and
@@ -40,6 +43,13 @@ implementation file, sharing one AST parse between dependency discovery and
 indexing. Source and PCResolve facts are cached for reuse within an unchanged
 source snapshot. Assessment results depend on the supplied call, rather than
 only on the API identity.
+
+The common adapter validates the producer schema, required call fields and
+source hashes before admitting a fact snapshot. Cached fact trees are read-only;
+producer expansion creates a separate snapshot. Unsupported producer contracts
+retain an explicit boundary in either consumer. The
+[fact consumption contract](fact-contract.md) describes the available fields,
+their limits and the source freshness checks.
 
 ## Structural propagation
 
@@ -83,7 +93,10 @@ and output models.
 | [`vppdetector/__init__.py`](../vppdetector/__init__.py) | Public Python interfaces. |
 | [`vppdetector/models.py`](../vppdetector/models.py) | Source identities, findings and parameter-level evidence. |
 | [`vppdetector/source.py`](../vppdetector/source.py) | Source indexing, import roots and API location. |
-| [`vppdetector/core.py`](../vppdetector/core.py) | Shared propagation logic, PCResolve adapter and reusable analysis context. |
+| [`vppdetector/_analysis_context.py`](../vppdetector/_analysis_context.py) | Source preparation and a reusable context independent of either consumer. |
+| [`vppdetector/_fact_adapter.py`](../vppdetector/_fact_adapter.py) | Producer capability checks, source validation and read-only fact caching. |
+| [`vppdetector/_program_facts.py`](../vppdetector/_program_facts.py) | Common target, binding, condition, capture and copy-protocol readers. |
+| [`vppdetector/core.py`](../vppdetector/core.py) | Structural propagation and witness construction. |
 | [`vppdetector/scanner.py`](../vppdetector/scanner.py) | Whole-package and on-demand scan scopes. |
 | [`vppdetector/assessment.py`](../vppdetector/assessment.py) | Call-specific analysis of one supplied parameter change. |
 | [`vppdetector/encoding.py`](../vppdetector/encoding.py) | Retained encoding helper; source indexing uses Python's declared source encoding. |

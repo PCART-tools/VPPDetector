@@ -1,35 +1,52 @@
-"""Whole-package and on-demand scopes over the same VPP detection core."""
+## @package vppdetector.scanner
+#  Whole-package and on-demand scans over the shared detection core.
+#  基于共享检测核心执行全包扫描和按需扫描。
 
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional, Sequence
 
-from .core import AnalysisContext, ResolutionError, scan_function
+from ._analysis_context import (
+    AnalysisContext,
+    PathLike,
+    ScanSource,
+)
+from ._analysis_context import (
+    prepare_context as _prepare_context,
+)
+from ._analysis_context import (
+    validate_depth as _validate_depth,
+)
+from ._fact_adapter import ResolutionError
+from .core import scan_function
 from .models import (
     AnalysisBoundary,
     ForwardingFinding,
     FunctionIdentity,
+    ScanCoverageStatus,
     ScanReport,
-    SourceContext,
+    VariadicCoverage,
     VariadicFunction,
 )
-from .source import IndexedFunction, SourceIndex, build_source_index, normalized_import_roots
-
-PathLike = Union[str, Path]
-ScanSource = Union[PathLike, SourceContext]
+from .source import IndexedFunction, SourceIndex
 
 
+## Scan every eligible function in one library source snapshot
+## 扫描单个库源码快照中的所有可分析函数
+#
+#  @param package_root Library source directory or standalone Python file
+#  @param import_roots Optional module roots used for import resolution
+#  @param max_depth Maximum forwarding depth; must be positive
+#  @param context Optional reusable analysis context for the same source snapshot
+#  @return ScanReport containing findings, boundaries and coverage
 def scan_package(
-    package_root: ScanSource,
+    package_root,
     *,
-    import_roots: Optional[Sequence[PathLike]] = None,
-    max_depth: int = 5,
-    context: Optional[AnalysisContext] = None,
-) -> ScanReport:
-    """Find VPPs in one library version, optionally reusing analysis state."""
-
+    import_roots=None,
+    max_depth=5,
+    context=None,
+):
     _validate_depth(max_depth)
     index, context = _prepare_context(package_root, import_roots, context)
     if index.is_api_scope:
@@ -40,21 +57,23 @@ def scan_package(
     return _scan_entries(context, entries, max_depth=max_depth)
 
 
+## Scan one requested API and its reachable forwarding path
+## 扫描指定API及其可达的参数转发路径
+#
+#  @param package_root Library source directory or standalone Python file
+#  @param target_api Source identity of the requested API
+#  @param import_roots Optional module roots used for import resolution
+#  @param max_depth Maximum forwarding depth; must be positive
+#  @param context Optional reusable analysis context for the same source snapshot
+#  @return ScanReport scoped to the requested API
 def scan_api(
-    package_root: ScanSource,
-    target_api: FunctionIdentity,
+    package_root,
+    target_api,
     *,
-    import_roots: Optional[Sequence[PathLike]] = None,
-    max_depth: int = 5,
-    context: Optional[AnalysisContext] = None,
-) -> ScanReport:
-    """Find VPPs reachable from one API without assessing a client call.
-
-    API identity resolution may follow imports, aliases and inherited methods.
-    The requested API stays attached to findings while path steps identify the
-    actual source implementations.
-    """
-
+    import_roots=None,
+    max_depth=5,
+    context=None,
+):
     _validate_depth(max_depth)
     index, context = _prepare_context(package_root, import_roots, context)
     if not index.files:
@@ -62,7 +81,18 @@ def scan_api(
     try:
         entry = context.resolve_api(target_api)
     except ResolutionError as exc:
-        return _missing_api_report(index, target_api, "entry_resolution_failed", str(exc))
+        report = _missing_api_report(
+            index, target_api,
+            exc.code if exc.code in {'pcresolve_fact_contract_unavailable', 'flow_analysis_failed',
+                                     'constructor_analysis_failed'}
+            else 'entry_resolution_failed', str(exc))
+        nominal = index.find(target_api)
+        if nominal is not None and exc.code in {
+                'pcresolve_fact_contract_unavailable', 'flow_analysis_failed'}:
+            return replace(report, coverage=tuple(
+                VariadicCoverage(nominal.identity, name, kind, ScanCoverageStatus.UNAVAILABLE,
+                                 0, (exc.code,)) for name, kind in nominal.variadic_parameters))
+        return report
     if entry is None or entry.is_overload:
         return _missing_api_report(
             index,
@@ -84,19 +114,39 @@ def scan_api(
             for function in report.variadic_functions
         ),
         findings=tuple(replace(finding, function=target_api) for finding in report.findings),
+        boundaries=tuple(
+            replace(boundary, root_function=target_api)
+            if boundary.root_function == entry.identity else boundary
+            for boundary in report.boundaries
+        ),
+        coverage=tuple(
+            replace(
+                channel, function=target_api,
+                implementation=entry.identity if target_api != entry.identity else None,
+            )
+            for channel in report.coverage
+        ),
     )
 
 
+## Scan selected indexed functions and assemble findings, boundaries and coverage
+## 扫描选定的索引函数并汇总发现、边界及覆盖信息
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entries Indexed functions selected for scanning
+#  @param max_depth Maximum number of forwarding steps to analyze
+#  @return Report containing the selected functions, findings, boundaries and coverage
 def _scan_entries(
-    context: AnalysisContext,
-    entries: Sequence[IndexedFunction],
+    context,
+    entries,
     *,
-    max_depth: int,
-) -> ScanReport:
-    variadic_functions: List[VariadicFunction] = []
-    findings: List[ForwardingFinding] = []
-    boundaries: List[AnalysisBoundary] = list(context.index.boundaries)
-    schema_version: Optional[str] = None
+    max_depth,
+):
+    variadic_functions = []
+    findings = []
+    boundaries = list(context.index.boundaries)
+    coverage = []
+    schema_version = None
     for entry in entries:
         if not entry.variadic_parameters:
             continue
@@ -104,6 +154,29 @@ def _scan_entries(
         entry_findings, entry_boundaries, entry_schema = scan_function(context, entry, max_depth)
         findings.extend(entry_findings)
         boundaries.extend(entry_boundaries)
+        for name, kind in entry.variadic_parameters:
+            channel_boundaries = (
+                *context.index.boundaries,
+                *(boundary for boundary in entry_boundaries
+                  if boundary.parameter_name == name and boundary.parameter_kind == kind),
+            )
+            unavailable = any(
+                boundary.code in {"flow_analysis_failed", "pcresolve_fact_contract_unavailable"}
+                and boundary.function == entry.identity
+                for boundary in channel_boundaries
+            )
+
+            # 区分分析不可用、存在已知边界以及没有已知边界
+            status = (
+                ScanCoverageStatus.UNAVAILABLE if unavailable else
+                ScanCoverageStatus.LIMITED if channel_boundaries else
+                ScanCoverageStatus.NO_KNOWN_BOUNDARY
+            )
+            coverage.append(VariadicCoverage(
+                entry.identity, name, kind, status,
+                sum(f.parameter_name == name and f.parameter_kind == kind for f in entry_findings),
+                tuple(dict.fromkeys(boundary.code for boundary in channel_boundaries)),
+            ))
         if entry_schema is not None:
             schema_version = entry_schema
     return ScanReport(
@@ -113,42 +186,16 @@ def _scan_entries(
         findings=tuple(findings),
         boundaries=tuple(boundaries),
         analyzer_schema_version=schema_version,
+        coverage=tuple(coverage),
     )
 
 
-def _prepare_context(
-    package_root: ScanSource,
-    import_roots: Optional[Sequence[PathLike]],
-    context: Optional[AnalysisContext],
-) -> tuple[SourceIndex, Optional[AnalysisContext]]:
-    if isinstance(package_root, SourceContext):
-        source = package_root
-        if import_roots is not None:
-            source = replace(source, import_roots=tuple(Path(path) for path in import_roots))
-    else:
-        source = SourceContext(
-            package_root=Path(package_root),
-            import_roots=tuple(Path(path) for path in (import_roots or ())),
-        )
-    if context is not None:
-        expected = SourceContext(source.package_root.resolve(), normalized_import_roots(source))
-        actual = context.index.source
-        if (
-            actual.package_root.resolve() != expected.package_root
-            or normalized_import_roots(actual) != expected.import_roots
-        ):
-            raise ValueError("Analysis context must use the requested source root and import roots")
-        return context.index, context
-    index = build_source_index(source)
-    return index, AnalysisContext.from_index(index) if index.files else None
-
-
-def _validate_depth(max_depth: int) -> None:
-    if isinstance(max_depth, bool) or not isinstance(max_depth, int) or max_depth < 1:
-        raise ValueError("max_depth must be a positive integer")
-
-
-def _empty_source_report(index: SourceIndex) -> ScanReport:
+## Build a report explaining that the source scope contains no Python files
+## 构建说明源码作用域中没有Python文件的报告
+#
+#  @param index Source index used for definitions and imports
+#  @return Empty report with a no-python-sources boundary
+def _empty_source_report(index):
     return ScanReport(
         source=index.source,
         functions_scanned=0,
@@ -164,9 +211,17 @@ def _empty_source_report(index: SourceIndex) -> ScanReport:
     )
 
 
+## Build a report for an API that cannot be resolved to one implementation
+## 为无法解析到唯一实现的API构建报告
+#
+#  @param index Source index used for definitions and imports
+#  @param target_api Source identity of the API being analyzed
+#  @param code Machine-readable reason the API could not be resolved
+#  @param message Human-readable explanation of the resolution boundary
+#  @return Empty report with the target API and its resolution boundary
 def _missing_api_report(
-    index: SourceIndex, target_api: FunctionIdentity, code: str, message: str
-) -> ScanReport:
+    index, target_api, code, message
+):
     return ScanReport(
         source=index.source,
         functions_scanned=0,

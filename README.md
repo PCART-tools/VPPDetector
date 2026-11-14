@@ -15,11 +15,13 @@ VPPDetector provides three Python interfaces:
 
 Scan results contain findings and analysis boundaries. An empty findings
 collection means no VPP was detected within the supported analysis.
+The `coverage` collection summarizes recorded limits separately for each
+variadic channel; `no_known_boundary` does not certify complete coverage.
 
 ## Requirements
 
 - Python 3.9 or newer
-- PCResolve newer than 1.0.7 (`pcresolve>1.0.7`)
+- PCResolve 1.0.8 or newer (`pcresolve>=1.0.8`)
 
 From this checkout, install the package in editable mode:
 
@@ -98,6 +100,8 @@ source identities and result fields.
   responsibilities and the original research scanner.
 - [Analysis coverage and limits](docs/analysis-limits.md): supported propagation,
   assessment states and unresolved analysis boundaries.
+- [Fact consumption contract](docs/fact-contract.md): PCResolve fact validation,
+  supported representations and consumer obligations.
 
 The original scanner and historical outputs are retained; see
 [Version 1.0 research scanner](docs/design.md#version-10-research-scanner).

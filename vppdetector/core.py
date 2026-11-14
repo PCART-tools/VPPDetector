@@ -1,172 +1,54 @@
-"""Shared PCResolve facts and structural rules for both VPP scan scopes."""
+## @package vppdetector.core
+#  Shared PCResolve facts and structural rules for VPP scans.
+#  为VPP扫描提供共享的PCResolve事实和结构规则。
 
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
 
+from ._analysis_context import AnalysisContext
+from ._fact_adapter import PCResolveAdapter as PCResolveAdapter
+from ._fact_adapter import ResolutionError
+from ._program_facts import (
+    call_span,
+    candidate_identities,
+    capture_names,
+    conditional_constructor_signature,
+    conditional_path_conditions,
+    conditional_source_binding,
+    conditions_possible,
+    consistent_conditions,
+    copy_protocol_target,
+    direct_calls,
+    identity_from_target,
+    immediate_body,
+    preserved_mapping_remainder,
+    source_classmethod_binding,
+    source_constructor_binding,
+)
+from ._program_facts import (
+    target_status as _target_status,
+)
 from .models import (
     AnalysisBoundary,
     ForwardingFinding,
     ForwardingStep,
     FunctionIdentity,
-    SourceContext,
     SourceSpan,
     VariadicKind,
 )
-from .source import IndexedFunction, SourceIndex, build_source_index
+from .source import IndexedFunction
 
 
-class ResolutionError(RuntimeError):
-    """Raised when PCResolve cannot analyze an explicit source entry."""
-
-
-class PCResolveAdapter:
-    """Narrow adapter around PCResolve's value-flow API."""
-
-    def __init__(self, index: SourceIndex) -> None:
-        try:
-            from pcresolve import FlowAnalyzer
-        except ImportError as exc:  # pragma: no cover - packaging failure
-            raise ResolutionError(
-                "PCResolve newer than 1.0.7 is required; install pcresolve>1.0.7 "
-                "with 'python -m pip install -e .' from the VPPDetector checkout"
-            ) from exc
-        self._analyzer = FlowAnalyzer(
-            source_files=index.files,
-            import_roots=index.source.import_roots,
-        )
-        self._analysis_cache = {}
-        self._expansion_cache = {}
-
-    def analyze(self, function: FunctionIdentity, max_depth: int = 1) -> Any:
-        from pcresolve import FunctionRef
-
-        cache_key = (function, max_depth)
-        cached = self._analysis_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        entry = FunctionRef(
-            module=function.module,
-            qualname=function.qualname,
-            file_path=str(function.file_path or ""),
-            lineno=function.lineno or 0,
-        )
-        try:
-            analysis = self._analyzer.analyze(entry, max_depth=max_depth)
-        except (KeyError, RuntimeError, ValueError) as exc:
-            raise ResolutionError(str(exc)) from exc
-        self._analysis_cache[cache_key] = analysis
-        return analysis
-
-    def expand(self, analysis: Any, call_id: str) -> Any:
-        """Expand one exact edge, retaining its incoming program facts."""
-
-        cache_key = (id(analysis), call_id)
-        cached = self._expansion_cache.get(cache_key)
-        if cached is not None:
-            return cached[1]
-        try:
-            expanded = self._analyzer.expand(analysis, call_id, additional_depth=1)
-        except (KeyError, RuntimeError, StopIteration, ValueError) as exc:
-            raise ResolutionError(str(exc)) from exc
-        # Retain the input too: an object id must not be reused for a different
-        # receiver snapshot while an expansion is cached.
-        self._expansion_cache[cache_key] = (analysis, expanded)
-        return expanded
-
-
-@dataclass
-class AnalysisContext:
-    """Reusable source and PCResolve state for one library source version."""
-
-    index: SourceIndex
-    adapter: PCResolveAdapter
-    _scan_cache: dict = field(default_factory=dict, init=False, repr=False)
-    _transform_spans: dict = field(default_factory=dict, init=False, repr=False)
-    _return_transform_spans: dict = field(default_factory=dict, init=False, repr=False)
-
-    @classmethod
-    def from_source(cls, source: SourceContext) -> "AnalysisContext":
-        return cls.from_index(build_source_index(source))
-
-    @classmethod
-    def for_api(cls, source: SourceContext, target_api: FunctionIdentity) -> "AnalysisContext":
-        """Prepare a located API and its explicit package-local import closure.
-
-        Without a file hint, retain full-source preparation. Reuse this context
-        only for APIs whose implementations/dependencies are in its fixed file
-        set and only while the source snapshot remains unchanged.
-        """
-
-        return cls.from_index(build_source_index(source, target_api=target_api))
-
-    @classmethod
-    def from_index(cls, index: SourceIndex) -> "AnalysisContext":
-        return cls(index=index, adapter=PCResolveAdapter(index))
-
-    def resolve_api(self, identity: FunctionIdentity) -> Optional[IndexedFunction]:
-        entry = self.index.find(identity) or self.index.resolve_imported(identity)
-        if entry is not None:
-            return entry
-        if identity.file_path or identity.lineno:
-            return None
-        # Resolve the public class prefix before asking PCResolve for an
-        # inherited implementation. Never fall back to a terminal name match.
-        method = self.index.resolve_method_identity(identity)
-        analysis = self.adapter.analyze(method or identity)
-        return self.index.find(identity_from_target(analysis.entry))
-
-
-def identity_from_target(target: Any) -> FunctionIdentity:
-    def value(name: str, default: Any) -> Any:
-        if isinstance(target, dict):
-            return target.get(name, default)
-        return getattr(target, name, default)
-
-    path = value("file_path", "")
-    return FunctionIdentity(
-        module=value("module", ""),
-        qualname=value("qualname", ""),
-        file_path=Path(path) if path else None,
-        lineno=value("lineno", 0) or None,
-    )
-
-
-def candidate_identities(call: Any) -> tuple[FunctionIdentity, ...]:
-    result = []
-    for candidate in getattr(call, "target_candidates", ()):
-        identity = identity_from_target(candidate)
-        if identity not in result:
-            result.append(identity)
-    return tuple(result)
-
-
-def direct_calls(analysis: Any, caller: FunctionIdentity) -> Iterable[Any]:
-    for call in analysis.calls:
-        owner = identity_from_target(call.caller)
-        if (
-            owner.module == caller.module
-            and owner.qualname == caller.qualname
-            and (not caller.lineno or owner.lineno == caller.lineno)
-            and (not caller.file_path or owner.file_path == caller.file_path)
-        ):
-            yield call
-
-
-def call_span(call: Any) -> SourceSpan:
-    return SourceSpan(
-        file_path=Path(call.caller.file_path or ""),
-        lineno=call.lineno,
-        col_offset=call.col_offset,
-        end_lineno=call.end_lineno or call.lineno,
-        end_col_offset=call.end_col_offset or call.col_offset,
-    )
-
-
-def _expansion_kind(argument: dict) -> Optional[VariadicKind]:
+## Classify an argument as positional or keyword expansion
+## 判定实参属于位置展开还是关键字展开
+#
+#  @param argument Producer argument record describing starred or keyword expansion
+#  @return Positional or keyword variadic kind, or None for an ordinary argument
+def _expansion_kind(argument):
     if argument.get("starred"):
         return VariadicKind.POSITIONAL
     if "keyword" in argument and argument["keyword"] is None:
@@ -174,9 +56,12 @@ def _expansion_kind(argument: dict) -> Optional[VariadicKind]:
     return None
 
 
-def _whole_container(flow: dict) -> bool:
-    """Require an open container, not a selected element or dict key."""
-
+## Require an open container, not a selected element or dict key
+## 要求证据指向开放容器，而非选中元素或字典键
+#
+#  @param flow Producer data-flow record being checked
+#  @return Whether the flow describes the whole container or its element wildcard
+def _whole_container(flow):
     if flow.get("object_only") or flow.get("container_object"):
         return False
     if flow.get("projection") or flow.get("container_role") == "key":
@@ -187,6 +72,8 @@ def _whole_container(flow: dict) -> bool:
     return flow.get("relation") in {"contained", "derived"} and path == ["*"]
 
 
+## Hold scan state for one variadic forwarding channel.
+## 保存单个可变参数转发通道的扫描状态。
 @dataclass(frozen=True)
 class _State:
     function: IndexedFunction
@@ -196,42 +83,98 @@ class _State:
     path: Tuple[ForwardingStep, ...] = ()
     ancestry: tuple = ()
     analysis: Any = field(default=None, compare=False, repr=False)
+    capture: bool = False
+    conditional: bool = False
+    constructor_query: bool = False
 
 
+## Follow open variadic containers to fixed expansion signatures
+## 沿开放可变参数容器追踪到固定参数展开签名
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param entry Resolved source entry for the requested API
+#  @param max_depth Maximum number of forwarding steps to analyze
+#  @return Findings, analysis boundaries and the PCResolve schema version
 def scan_function(
-    context: AnalysisContext, entry: IndexedFunction, max_depth: int = 5
-) -> tuple[tuple[ForwardingFinding, ...], tuple[AnalysisBoundary, ...], Optional[str]]:
-    """Follow open variadic containers to fixed expansion signatures.
-
-    Ordinary arguments carry containers across helpers but never constitute
-    sinks themselves. The result is a structural pattern, not a client-call
-    compatibility decision or a claim of guaranteed runtime failure.
-    """
-
-    cache_key = (entry.identity, max_depth)
+    context, entry, max_depth=5
+):
+    cache_key = (entry.identity, max_depth, entry.query_class, entry.query_alias)
     if cache_key in context._scan_cache:
         return context._scan_cache[cache_key]
+
+    # 每个状态跟踪一个入口参数及其当前转发路径
     pending = [_State(entry, name, name, kind) for name, kind in entry.variadic_parameters]
     findings = []
     boundaries = []
     schema = None
     while pending:
         state = pending.pop(0)
+        boundary_start = len(boundaries)
         identity = state.function.identity
         try:
-            analysis = state.analysis or context.adapter.analyze(identity)
+            analysis = state.analysis or context.adapter.analyze(
+                state.function.query_class or state.function.query_alias or identity)
         except ResolutionError as exc:
-            boundaries.append(AnalysisBoundary("flow_analysis_failed", str(exc), identity))
+            boundaries.append(_root_boundary(
+                AnalysisBoundary(exc.code, str(exc), identity), entry, state
+            ))
             continue
-        state_key = (identity, state.parameter, state.kind, _receiver_contexts(analysis, identity))
+        if (state.analysis is None and (
+                state.function.query_class is not None
+                and any(b.get('reason') == 'source_lookup_candidate' for b in analysis.boundaries)
+                or any(b.get('reason') == 'constructor_binding_unconfirmed'
+                       for b in analysis.boundaries))):
+            try:
+                conditioned = context.adapter.analyze(
+                    state.function.query_class or state.function.query_alias or identity,
+                    conditional_source_state=True)
+            except ResolutionError as exc:
+                boundaries.append(_root_boundary(AnalysisBoundary(
+                    "conditional_source_query_unavailable",
+                    "Conditional source query unavailable: " + str(exc), identity,
+                ), entry, state))
+            else:
+                conditional_state = replace(
+                    state, analysis=conditioned, conditional=True,
+                    constructor_query=state.function.query_class is None,
+                )
+                if conditional_state not in pending:
+                    pending.append(conditional_state)
+
+        # 用参数、接收者和展开上下文识别当前路径中的递归
+        state_key = (
+            identity, state.parameter, state.kind, state.capture, state.conditional,
+            _receiver_contexts(analysis, identity),
+            repr(analysis.inputs.get('expansion_context', {}).get('parameter_facts', {})),
+        )
         if state_key in state.ancestry:
             boundaries.append(
-                AnalysisBoundary("recursive_forwarding", "Recursive forwarding path.", identity)
+                _root_boundary(
+                    AnalysisBoundary(
+                        "recursive_forwarding", "Recursive forwarding path.", identity
+                    ),
+                    entry, state,
+                )
             )
             continue
+
         schema = getattr(analysis, "schema_version", schema)
         relevant_calls = set()
+
         for call in direct_calls(analysis, identity):
+            if (state.constructor_query
+                    and conditional_constructor_signature(analysis, call) is None):
+                continue
+            if _call_depends_on_parameter(call, state.parameter):
+                relevant_calls.add(call.id)
+            capture_flows = _capture_flows(context, analysis, state, call)
+            if _call_captures_parameter(context, state, call) and not capture_flows:
+                relevant_calls.add(call.id)
+                boundaries.append(AnalysisBoundary(
+                    "closure_capture_not_followed",
+                    "A local callable captures this carrier; closure propagation is not followed.",
+                    identity, call_span(call),
+                ))
             object_arguments = [
                 item.get("argument")
                 for item in call.argument_sources
@@ -240,12 +183,18 @@ def scan_function(
                     for value in item.get("sources", ())
                 )
             ]
+            inputs = (
+                [dict(flow, source_parameter=state.parameter) for flow in call.argument_flows
+                 if flow.get("kind") == "capture" and flow.get("source") == state.parameter]
+                if state.capture else call.parameter_flows
+            )
             flows = [
-                flow
-                for flow in call.parameter_flows
+                flow for flow in inputs
                 if flow.get("source_parameter") == state.parameter
                 and flow.get("argument") not in object_arguments
+                and conditions_possible(context, flow)
             ]
+            flows.extend(capture_flows)
             flows.extend(
                 _returned_flows(
                     context, analysis, state, call, max_depth - len(state.path) - 1, boundaries
@@ -254,11 +203,17 @@ def scan_function(
             if not flows:
                 continue
             relevant_calls.add(call.id)
+
+            # 仅追踪仍可作为开放容器传递的事实，未知变换记录为分析边界
             carried = [flow for flow in flows if _open_container(context, flow)]
             span = call_span(call)
             uncertain_operation = _carrier_operation_boundary(
                 analysis, identity, state.parameter, call
             )
+            if state.capture and uncertain_operation is None:
+                uncertain_operation = next((operation for flow in carried for operation in (
+                    _return_operation_boundary(analysis, state.function, flow, call),
+                ) if operation is not None), None)
             if carried and uncertain_operation is not None:
                 boundaries.append(
                     AnalysisBoundary(
@@ -279,13 +234,77 @@ def scan_function(
                     )
                 )
                 continue
+
             candidates = candidate_identities(call)
             selected = identity_from_target(call.target) if call.target else None
+            allocated_classes = tuple(dict.fromkeys(
+                identity_from_target(candidate)
+                for source in getattr(call, "receiver_sources", ())
+                if isinstance(source, dict)
+                and source.get("kind") == "call_result"
+                and source.get("relation") == "direct"
+                and not source.get("projection") and not source.get("output_path")
+                and source.get("evidence")
+                for candidate in source.get("instance_candidates", ())
+                if isinstance(candidate, dict)
+                and candidate.get("module") and candidate.get("qualname")
+                and candidate.get("file_path") and candidate.get("lineno")
+            ))
+            method_name = call.callee_name.rsplit(".", 1)[-1]
+            allocation_candidates = tuple(dict.fromkeys(
+                function.identity
+                for owner in allocated_classes
+                if owner is not None and owner in context.index.classes
+                for function in context.index.functions
+                if function.identity.module == owner.module
+                and function.identity.qualname.startswith(owner.qualname + ".")
+                and function.identity.qualname.rsplit(".", 1)[-1] == method_name
+                and "." not in function.identity.qualname[len(owner.qualname) + 1:]
+            ))
+            if allocation_candidates and any(
+                    source.get("value_incomplete")
+                    or source.get("attribute_provenance")
+                    for source in getattr(call, "receiver_sources", ())
+                    if isinstance(source, dict)):
+                boundaries.append(AnalysisBoundary(
+                    "pcresolve_class_attribute_state_unknown",
+                    "PCResolve identifies a possible allocated class, but class attribute state "
+                    "or alternative receiver types remain incomplete.",
+                    identity,
+                    call_span(call),
+                ))
             targets = (
                 (selected,)
                 if selected and call.target_status == "resolved"
-                else tuple(dict.fromkeys(((selected,) if selected else ()) + candidates))
+                else tuple(dict.fromkeys(
+                    ((selected,) if selected else ()) + candidates + allocation_candidates
+                ))
             )
+
+            # 目标身份或类绑定缺乏证据时停止追踪，避免将候选当作确定目标
+            if any(boundary.get("call_id") == call.id
+                   and boundary.get("reason") == "callable_identity_incomplete"
+                   for boundary in analysis.boundaries):
+                targets = ()
+            if (any(value.get("kind") == "parameter" and value.get("source_class_origin")
+                    or value.get("class_type") and value.get("class_lookup_mutations")
+                    for value in call.receiver_sources)
+                    or any("lookup_preservation" in fact
+                           for fact in getattr(call, "class_method_bindings", ()))
+                    or getattr(call, 'conditional_source_bindings', ())
+                    and call.target_status != 'constructor'
+                    or analysis.inputs.get('conditional_source_state') is True
+                    and call.target_status in ('super_new', 'super_method', 'classmethod')):
+                if (source_classmethod_binding(analysis, call) is None
+                        and conditional_source_binding(analysis, call) is None):
+                    targets = ()
+            constructor_fact = source_constructor_binding(analysis, call)
+            constructor_signature = conditional_constructor_signature(analysis, call)
+            if ((getattr(call, "constructor_bindings", ())
+                    or call.target_status == "constructor" and selected is not None
+                    and selected.qualname.endswith((".__new__", ".__init__")))
+                    and constructor_fact is None and constructor_signature is None):
+                targets = ()
             if not targets:
                 boundaries.append(
                     AnalysisBoundary(
@@ -296,6 +315,7 @@ def scan_function(
                     )
                 )
                 continue
+
             for target in targets:
                 definition = _target_definition(context, target)
                 if definition is None:
@@ -318,7 +338,21 @@ def scan_function(
                     status,
                 )
                 for flow in carried:
+                    conditions = conditional_path_conditions(
+                        analysis, call, definition.identity, flow)
+                    if conditions is None:
+                        continue
+                    step = replace(step, conditions=conditions)
                     path = (*state.path, *flow.get("return_steps", ()), step)
+                    path_conditions = []
+                    for hop in path:
+                        for condition in hop.conditions:
+                            if condition not in path_conditions:
+                                path_conditions.append(condition)
+
+                    # 不合并互相矛盾的路径条件，深度耗尽时保留边界
+                    if not consistent_conditions(path_conditions):
+                        continue
                     if len(path) > max_depth:
                         boundaries.append(
                             AnalysisBoundary(
@@ -356,6 +390,7 @@ def scan_function(
                                 receiver_type_evidence=tuple(
                                     getattr(call, "receiver_type_evidence", ())
                                 ),
+                                conditions=tuple(path_conditions),
                             )
                             if finding not in findings:
                                 findings.append(finding)
@@ -366,10 +401,18 @@ def scan_function(
                             else definition.signature.vararg
                         )
                     else:
-                        next_parameter = flow.get("target_parameter")
+                        next_parameter = flow.get("target_capture", flow.get("target_parameter"))
                         if flow.get("target_path"):
                             next_parameter = None
-                    if next_parameter not in _parameters(definition):
+                    captured = flow.get("target_capture") is not None
+                    if constructor_signature is not None:
+                        boundaries.append(AnalysisBoundary(
+                            'conditional_constructor_body_not_followed',
+                            'The conditional constructor reference establishes only a signature.',
+                            identity, span,
+                        ))
+                        continue
+                    if not captured and next_parameter not in _parameters(definition):
                         boundaries.append(
                             AnalysisBoundary(
                                 "propagation_binding_unavailable",
@@ -378,6 +421,14 @@ def scan_function(
                                 span,
                             )
                         )
+                        continue
+                    if (constructor_fact is not None
+                            and constructor_fact["body_execution"] != "synchronous"):
+                        boundaries.append(AnalysisBoundary(
+                            "deferred_callee_body_not_followed",
+                            "The bound constructor body executes in a deferred phase.",
+                            identity, span,
+                        ))
                         continue
                     body_boundaries = _callee_body_boundaries(analysis, call)
                     if body_boundaries:
@@ -410,18 +461,215 @@ def scan_function(
                         path,
                         (*state.ancestry, state_key),
                         child,
+                        captured,
+                        state.conditional,
                     )
                     if next_state not in pending:
                         pending.append(next_state)
-        boundaries.extend(_analysis_boundaries(analysis, identity, relevant_calls))
+
+        boundaries.extend(_deferred_capture_boundaries(context, analysis, state))
+        boundaries.extend(_analysis_boundaries(analysis, identity, relevant_calls, state.parameter))
+        boundaries[boundary_start:] = [
+            _root_boundary(boundary, entry, state) for boundary in boundaries[boundary_start:]
+        ]
     result = (tuple(findings), tuple(dict.fromkeys(boundaries)), schema)
     context._scan_cache[cache_key] = result
     return result
 
 
-def _receiver_contexts(analysis: Any, identity: FunctionIdentity) -> tuple:
-    """A source owner's contexts, not a proof that unknown contexts are absent."""
+## Build an analysis boundary attached to a root variadic parameter
+## 构建关联到根可变参数的分析边界
+#
+#  @param boundary Existing analysis boundary to associate with the root channel
+#  @param entry Resolved source entry for the requested API
+#  @param state Current abstract or analysis state
+#  @return Boundary annotated with the root function and variadic parameter
+def _root_boundary(
+    boundary, entry, state
+):
+    return replace(
+        boundary, root_function=entry.identity,
+        parameter_name=state.origin_parameter, parameter_kind=state.kind,
+    )
 
+
+## A recorded dependency, without asserting an open container shape
+## 读取参数依赖，但不据此断言容器形状开放
+#
+#  @param value Producer flow record to check for parameter dependence
+#  @param parameter Parameter name or parameter fact being checked
+#  @return Whether the source record depends on the named parameter or its container
+def _parameter_dependency(value, parameter):
+    return bool(
+        value.get("kind") in {"parameter", "capture"}
+        and value.get("source", value.get("name")) == parameter
+        or value.get("parameter_container") == parameter
+    )
+
+
+## Check whether a call consumes the selected variadic parameter
+## 检查调用是否消费选定的可变参数
+#
+#  @param call PCResolve producer call record being analyzed
+#  @param parameter Parameter name or parameter fact being checked
+#  @return Whether a receiver, argument or capture source depends on the parameter
+def _call_depends_on_parameter(call, parameter):
+    values = [*call.receiver_sources, *call.argument_flows]
+    values.extend(value for item in call.argument_sources for value in item.get("sources", ()))
+    values.extend(
+        value for item in getattr(call, "capture_bindings", ())
+        for value in item.get("sources", ())
+    )
+    return any(_parameter_dependency(value, parameter) for value in values)
+
+
+## Use shared scope facts only to diagnose a known local callable
+## 仅用共享作用域事实诊断已知的局部可调用对象
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param state Current abstract or analysis state
+#  @param target Source identity of the local target function
+#  @return Whether the indexed local target captures the selected parameter
+def _lexical_capture(
+    context, state, target
+):
+    identity = state.function.identity
+    if target.module != identity.module or not target.qualname.startswith(identity.qualname + "."):
+        return False
+    definition = context.index.find(target)
+    if definition is None:
+        return False
+    return state.parameter in capture_names(definition.node, (state.parameter,))
+
+
+## Check whether a call captures the selected parameter in a local function
+## 检查局部函数调用是否捕获选定参数
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param state Current abstract or analysis state
+#  @param call PCResolve producer call record being analyzed
+#  @return Whether the call has a recorded or lexically inferred parameter capture
+def _call_captures_parameter(context, state, call):
+    if any(
+        _parameter_dependency(value, state.parameter)
+        for capture in getattr(call, "capture_bindings", ())
+        for value in capture.get("sources", ())
+    ):
+        return True
+
+    # Older flow-0.2 snapshots can identify a lexical callee but omit captures.
+    # This fallback records a limit, never supplies a missing propagation edge.
+    # 旧版flow-0.2快照可能只识别词法被调函数而缺少捕获信息；此回退只记录边界，不补造传播边。
+    return any(_lexical_capture(context, state, target) for target in (
+        *((identity_from_target(call.target),) if call.target else ()),
+        *candidate_identities(call),
+    ))
+
+
+## Use only exact call-time open captures of an immediately invoked local function
+## 仅沿立即调用的局部函数读取精确的调用时开放捕获
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param state Current abstract or analysis state
+#  @param call PCResolve producer call record being analyzed
+#  @return Validated flow records for exact open captured containers
+def _capture_flows(context, analysis, state, call):
+    if (call.target is None or _target_status(analysis, call) != "resolved"
+            or call.analysis_status != "analyzed" or call.binding_status != "complete"
+            or call.binding_issues):
+        return []
+    target = identity_from_target(call.target)
+    definition = _target_definition(context, target)
+    if (definition is None or not immediate_body(definition.node)
+            or target.module != state.function.identity.module
+            or not target.qualname.startswith(state.function.identity.qualname + ".")
+            or any(candidate != target for candidate in candidate_identities(call))):
+        return []
+    records = getattr(call, "capture_bindings", ())
+    names = tuple(item.get("capture") for item in records)
+    lexical = capture_names(definition.node, names)
+    result = []
+    for record in records:
+        name = record.get("capture")
+        binding = record.get("container_binding", {})
+        roots = record.get("sources", ())
+        if (name not in lexical or names.count(name) != 1
+                or binding.get("status") != "exact" or binding.get("contents_unknown")
+                or binding.get("shape") not in {"dict", "list", "tuple"}
+                or not binding.get("evidence") or not conditions_possible(context, binding)
+                or len(roots) != 1 or roots[0].get("kind") != "container"
+                or roots[0].get("source") != binding.get("source")
+                or roots[0].get("container_shape") != binding.get("shape")
+                or roots[0].get("relation") != "direct"
+                or any(roots[0].get(flag) for flag in (
+                    "value_incomplete", "projection", "output_path",
+                ))):
+            continue
+        contents = record.get("current_sources", ())
+        if any(value.get("value_incomplete") or (value.get("object_only")
+                and not conditions_possible(context, value)) for value in contents):
+            continue
+        for value in contents:
+            if (not _parameter_dependency(value, state.parameter)
+                    or not _open_container(context, value)
+                    or not conditions_possible(context, value)):
+                continue
+            expected = "dict" if state.kind is VariadicKind.KEYWORD else {"list", "tuple"}
+            if (binding["shape"] != expected if isinstance(expected, str)
+                    else binding["shape"] not in expected):
+                continue
+            result.append(dict(value, source_parameter=state.parameter,
+                argument={"capture": name}, target_capture=name, target_parameter=None,
+                target_path=[], relation="direct", output_path=[]))
+    return result
+
+
+## Record boundaries for deferred uses of captured variadic values
+## 记录被捕获可变参数延迟使用所产生的边界
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param state Current abstract or analysis state
+#  @return Iterator of boundaries for returned local callables capturing the parameter
+def _deferred_capture_boundaries(
+    context, analysis, state
+):
+    identity = state.function.identity
+    for summary in analysis.functions:
+        if identity_from_target(summary["function"]) != identity:
+            continue
+        for value in summary.get("returns", ()):
+            if value.get("kind") not in {"callable", "function"}:
+                continue
+            target = FunctionIdentity(value.get("module", identity.module), value.get("source", ""))
+            if not _lexical_capture(context, state, target):
+                continue
+            span = None
+            for evidence in reversed(value.get("evidence", ())):
+                if evidence.get("file_path") and evidence.get("lineno"):
+                    span = SourceSpan(
+                        Path(evidence["file_path"]), evidence["lineno"],
+                        evidence.get("col_offset", 0),
+                        evidence.get("end_lineno", evidence["lineno"]),
+                        evidence.get("end_col_offset", 0),
+                    )
+                    break
+            yield AnalysisBoundary(
+                "deferred_callable_not_followed",
+                "A returned local callable lexically captures this carrier; "
+                "deferred execution is not followed.",
+                identity, span,
+            )
+
+
+## A source owner's contexts, not a proof that unknown contexts are absent
+## 读取源码所有者的接收者上下文，但不证明未知上下文不存在
+#
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param identity Source-level identity used for lookup
+#  @return Tuple of source receiver identities recorded for the function
+def _receiver_contexts(analysis, identity):
     return tuple(
         identity_from_target(receiver)
         for summary in analysis.functions
@@ -430,11 +678,18 @@ def _receiver_contexts(analysis: Any, identity: FunctionIdentity) -> tuple:
     )
 
 
+## Retain source callable/class facts on unique helper edges
+## 仅在唯一辅助调用边上保留源码可调用对象和类事实
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param call PCResolve producer call record being analyzed
+#  @param definition Indexed callee source function to analyze
+#  @return Validated neutral or call-context-specific producer analysis
+#  @exception ResolutionError If the call edge or required receiver facts are unusable
 def _expand_body(
-    context: AnalysisContext, analysis: Any, call: Any, definition: IndexedFunction
-) -> Any:
-    """Retain source callable/class facts on unique helper edges."""
-
+    context, analysis, call, definition
+):
     if call.binding_status == "invalid":
         raise ResolutionError("No usable call binding for callee-body propagation.")
     required = (
@@ -455,10 +710,22 @@ def _expand_body(
             for argument in call.argument_sources
             for value in argument.get("sources", ())
         )
-        if not required and not incoming_callable:
+        incoming_literal = any(argument.get("literal") is not None
+                               for argument in call.argument_sources)
+        incoming_class = any(value.get("source_class_origin") and value.get("class_type")
+                             for argument in call.argument_sources
+                             for value in argument.get("sources", ()))
+        incoming_instance = any(value.get("instance_type")
+                                for argument in call.argument_sources
+                                for value in argument.get("sources", ()))
+        if (not required and not incoming_callable and not incoming_literal and not incoming_class
+                and not incoming_instance
+                and not getattr(call, "capture_bindings", ())):
+
             # Instance-method source candidates and ordinary helpers retain
             # the existing nominal body analysis. Never use this fallback for
             # a missing class receiver context.
+            # 实例方法候选和普通辅助函数仍沿用原有函数体分析；接收者类上下文缺失时不得使用此回退。
             return neutral
     if (
         call.target is None
@@ -466,7 +733,17 @@ def _expand_body(
         or any(target != definition.identity for target in candidate_identities(call))
     ):
         raise ResolutionError("No unique usable call edge for callee-body propagation.")
+
     child = context.adapter.expand(analysis, call.id)
+    if (call.caller == call.target or any(
+            not getattr(inner, 'analysis_contexts', ())
+            or any(item.get('incoming_call_id') != call.id for item in inner.analysis_contexts)
+            for inner in direct_calls(child, definition.identity))):
+        try:
+            child = context.adapter.expand(analysis, call.id, isolate=True)
+        except (ResolutionError, TypeError) as exc:
+            raise ResolutionError(
+                'Mixed incoming callable contexts cannot prove one path.') from exc
     summaries = [
         summary
         for summary in child.functions
@@ -474,21 +751,74 @@ def _expand_body(
     ]
     if len(summaries) != 1:
         raise ResolutionError("Callee-body expansion is unavailable or budget-limited.")
+    class_states = [(argument.get("parameter"), value,
+                     "class_type" if value.get("class_type") else "instance_type")
+                    for argument in call.argument_sources for value in argument.get("sources", ())
+                    if (value.get("class_type") or value.get("instance_type"))
+                    and value.get("class_lookup_mutations")]
+    if class_states:
+        for inner in direct_calls(child, definition.identity):
+            contexts = getattr(inner, "analysis_contexts", ())
+            if not contexts:
+                raise ResolutionError("Incoming class lookup state is unavailable.")
+            for incoming in contexts:
+                for parameter, value, type_key in class_states:
+                    facts = incoming.get("parameter_facts", {}).get(parameter, ())
+                    if not facts or any(fact.get(type_key) != value[type_key]
+                            or fact.get("class_lookup_mutations") != value["class_lookup_mutations"]
+                            for fact in facts):
+                        raise ResolutionError(
+                            "Incoming class lookup state is incomplete or conflicting."
+                        )
     if not required:
+
         # PCResolve's top-level calls merge incoming contexts. Do not combine
         # a target from one edge with container facts from another. Keep the
         # narrow single-edge case; mixed snapshots remain explicit boundaries.
+        # PCResolve会合并顶层调用的输入上下文；不能把不同调用边的目标与容器事实拼在一起，混合快照保留为分析边界。
+        ordinary = (*definition.signature.positional_only,
+                    *definition.signature.positional_or_keyword,
+                    *definition.signature.keyword_only)
+        instances = {}
+        for argument in call.argument_sources:
+            parameter = argument.get("parameter")
+            if parameter in ordinary:
+                for value in argument.get("sources", ()):
+                    if value.get("instance_type"):
+                        instances.setdefault(parameter, []).append(value["instance_type"])
+                        if value.get("value_incomplete") or argument.get("target_path"):
+                            raise ResolutionError("Incoming instance binding is incomplete.")
         for inner in direct_calls(child, definition.identity):
             contexts = getattr(inner, "analysis_contexts", ())
             if not contexts or any(item.get("incoming_call_id") != call.id for item in contexts):
                 raise ResolutionError("Mixed incoming callable contexts cannot prove one path.")
+            for item in contexts:
+                for parameter, types in instances.items():
+                    values = item.get("parameter_facts", {}).get(parameter, ())
+                    if (not values or any(value.get("instance_type") not in types
+                            or value.get("value_incomplete") for value in values)
+                            or any(identity not in [value.get("instance_type") for value in values]
+                                   for identity in types)):
+                        raise ResolutionError(
+                            "Incoming instance context is incomplete or conflicting."
+                        )
+        constructor = source_constructor_binding(analysis, call)
+        if constructor is not None and constructor["phase"] == "__init__":
+            parameter = constructor["implicit_binding"]["parameter"]
+            positional = (*definition.signature.positional_only,
+                          *definition.signature.positional_or_keyword)
+            if not positional or positional[0] != parameter:
+                raise ResolutionError("Initializer implicit receiver binding is unavailable.")
         return child
+
     receivers = _receiver_contexts(child, definition.identity)
     if len(receivers) > 1:
         raise ResolutionError("Mixed class receiver contexts cannot prove one forwarding path.")
+
     # Unknown contexts may be absent from receiver_contexts. Validate every
     # actual incoming receiver value, including the explicit first formal of
     # __new__, rather than treating a single listed class as complete proof.
+    # 未知上下文可能不在receiver_contexts中；需核对每个实际接收者，包括__new__显式首参数，不能把单个类记录当作完整证明。
     if not receivers:
         raise ResolutionError("Incoming class receiver facts are incomplete or conflicting.")
     positional = (
@@ -516,7 +846,12 @@ def _expand_body(
     return child
 
 
-def _parameters(function: IndexedFunction) -> tuple:
+## Return all declared parameter names of a function
+## 返回函数声明的全部参数名称
+#
+#  @param function Indexed source function under analysis
+#  @return Tuple of positional, keyword-only and variadic parameter names
+def _parameters(function):
     signature = function.signature
     return tuple(
         name
@@ -531,14 +866,13 @@ def _parameters(function: IndexedFunction) -> tuple:
     )
 
 
-def _open_container(context: AnalysisContext, flow: dict) -> bool:
-    """Do not confuse a comprehension dependency with an open parameter space.
-
-    PCResolve currently gives some finite comprehensions a wildcard element
-    path. Source evidence is used only to reject that unproved shape; this is
-    not a second propagation analysis.
-    """
-
+## Do not confuse a comprehension dependency with an open parameter space
+## 避免把推导式依赖误判为开放参数空间
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param flow Producer data-flow record being checked
+#  @return Whether the flow proves an open container under the current conditions
+def _open_container(context, flow):
     if not _whole_container(flow):
         return False
     for evidence in flow.get("evidence", ()):
@@ -559,13 +893,18 @@ def _open_container(context: AnalysisContext, flow: dict) -> bool:
     return True
 
 
-def _depends_on_parameter(values: Iterable[dict], parameter: str, calls: dict) -> bool:
-    """Use input dependencies only to select relevant return queries, not to prove shape."""
-
+## Use input dependencies only to select relevant return queries, not to prove shape
+## 仅用输入依赖筛选返回查询，不据此证明容器形状
+#
+#  @param values Abstract values propagated through the analysis
+#  @param parameter Parameter name or parameter fact being checked
+#  @param calls Producer call records indexed by their source identifiers
+#  @return Whether any value depends on the parameter through recorded calls
+def _depends_on_parameter(values, parameter, calls):
     pending, seen = list(values), set()
     while pending:
         value = pending.pop()
-        if value.get("kind") == "parameter" and value.get("source") == parameter:
+        if value.get("kind") in {"parameter", "capture"} and value.get("source") == parameter:
             return True
         producer = calls.get(value.get("source"))
         if value.get("kind") == "call_result" and producer and producer.id not in seen:
@@ -573,16 +912,18 @@ def _depends_on_parameter(values: Iterable[dict], parameter: str, calls: dict) -
             pending.extend(
                 value for item in producer.argument_sources for value in item.get("sources", ())
             )
+            pending.extend(value for item in getattr(producer, "capture_bindings", ())
+                           for value in item.get("current_sources", ()))
     return False
 
 
-def _routable_return(context: AnalysisContext, value: dict) -> bool:
-    """Keep exact tuple slots until the router proves the selected open shape.
-
-    Slot containment is not itself a sink proof. Unknown selections, selected
-    input elements and derived operations must not become whole containers.
-    """
-
+## Keep exact tuple slots until the router proves the selected open shape
+## 保留精确tuple槽位，直到路由器证明开放形状
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param value Producer return value record considered for routing
+#  @return Whether the value is an open container or a supported exact projection
+def _routable_return(context, value):
     if value.get("object_only") or value.get("container_object"):
         return False
     if _open_container(context, value):
@@ -602,7 +943,9 @@ def _routable_return(context: AnalysisContext, value: dict) -> bool:
         projection and value.get("relation") == "derived"
     ):
         return False
+
     # Reuse the existing source-evidence rejection of finite comprehensions.
+    # 有限推导式仍沿用现有的源码证据拒绝规则。
     if not _open_container(context, dict(value, projection=[], output_path=[], relation="direct")):
         return False
     for evidence in value.get("evidence", ()):
@@ -633,22 +976,24 @@ def _routable_return(context: AnalysisContext, value: dict) -> bool:
     return True
 
 
+## Compose source-resolved whole-container returns using PCResolve's router
+## 通过PCResolve路由器组合源码解析的整容器返回路径
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param state Current abstract or analysis state
+#  @param destination Producer call whose arguments may consume returned containers
+#  @param budget Remaining bound for return-flow traversal
+#  @param boundaries Mutable collection receiving analysis limits encountered
+#  @return Routed return-flow records for the selected variadic parameter
 def _returned_flows(
-    context: AnalysisContext,
-    analysis: Any,
-    state: _State,
-    destination: Any,
-    budget: int,
-    boundaries: list,
-) -> list[dict]:
-    """Compose source-resolved whole-container returns using PCResolve's router.
-
-    An ordinary call's input dependency is not a return-shape guarantee. Whole
-    containers and exact tuple slots are routed through source summaries; only
-    a final open shape is a sink proof. Unknown effects, dynamic producers,
-    cycles and depth limits stay visible.
-    """
-
+    context,
+    analysis,
+    state,
+    destination,
+    budget,
+    boundaries,
+):
     local_calls = {call.id: call for call in direct_calls(analysis, state.function.identity)}
     arguments = [
         item
@@ -666,15 +1011,48 @@ def _returned_flows(
         resolve_return_dependencies,
     )
 
-    summaries, calls, producers = {}, {}, {}
+    summaries, calls, producers, protocols = {}, {}, {}, {}
 
+    ## Build an analysis boundary for an unsupported return-flow path
+    ## 为不受支持的返回流路径构建分析边界
+    #
+    #  @param code Machine-readable analysis boundary code
+    #  @param message Explanation of the unsupported return-flow path
+    #  @param call Analyzed call edge used to locate the boundary
     def boundary(code, message, call):
         boundaries.append(
             AnalysisBoundary(code, message, identity_from_target(call.caller), call_span(call))
         )
 
-    def safe_values(values, owner, owner_analysis, endpoint, remaining):
+    ## Collect returned values only when their source and control-flow evidence is safe
+    ## 仅在来源及控制流证据可靠时收集返回值
+    #
+    #  @param values Abstract values propagated through the analysis
+    #  @param owner Indexed source function owning the returned value
+    #  @param owner_analysis Producer analysis for the owning function
+    #  @param endpoint Owning function node or call where returned values are read
+    #  @param remaining Forwarding depth left for the analysis
+    #  @param captured Names whose wildcard capture paths can be normalized
+    #  @return Routable values supported by current source and control-flow evidence
+    def safe_values(values, owner, owner_analysis, endpoint, remaining, captured=()):
         values = list(values)
+
+        # Materialized contents need not repeat the object's branch conditions.
+        # Dropping an impossible endpoint alone could leave its stale inputs
+        # looking like an independent open container after a control-flow join.
+        # 已物化的容器内容可能不再带有对象原先的分支条件；只删除不可能的终点会让旧输入在控制流合并后看似独立的开放容器。
+        if any(
+            (value.get("object_only") or value.get("container_object"))
+            and not conditions_possible(context, value) for value in values
+        ):
+            boundaries.append(AnalysisBoundary(
+                "return_object_unproven",
+                "Current contents cannot be separated from an impossible object context.",
+                owner.identity,
+                call_span(endpoint) if endpoint is not owner.node else None,
+            ))
+            return []
+        values = [value for value in values if conditions_possible(context, value)]
         endpoints = [
             value for value in values if value.get("object_only") or value.get("container_object")
         ]
@@ -720,7 +1098,7 @@ def _returned_flows(
                         evidence.get("end_lineno", evidence["lineno"]),
                         evidence.get("end_col_offset", 0),
                     )
-            operation = _return_operation_boundary(owner_analysis, owner.identity, value, read_at)
+            operation = _return_operation_boundary(owner_analysis, owner, value, read_at)
             if operation is not None:
                 boundaries.append(
                     AnalysisBoundary(
@@ -732,14 +1110,25 @@ def _returned_flows(
                 )
                 continue
             result.append(value)
+        if state.capture and owner.identity == state.function.identity:
+            result = [dict(value, kind="parameter") if value.get("kind") == "capture"
+                      and value.get("source") == state.parameter else value for value in result]
         if endpoint is owner.node:
+
             # A capture's final wildcard denotes its elements, not an extra
             # nested container. The incoming binding supplies the open space.
+            # 捕获路径末尾的通配符表示元素，不表示额外嵌套容器；开放空间由传入绑定提供。
             result = [_capture_return_value(value, owner) for value in result]
+            result = [dict(value, relation="direct", output_path=[])
+                      if value.get("kind") == "capture" and value.get("source") in captured
+                      and value.get("output_path") == ["*"] and not value.get("projection")
+                      else value for value in result]
         if object_path and result:
+
             # Adapt only current contents to the neutral dependency router.
             # The synthetic binding never reads the producer's old inputs;
             # its call context records the proven source-return witnesses.
+            # 仅将当前内容交给通用依赖路由器；合成绑定不读取生产者旧输入，调用上下文只记录已证明的源码返回见证。
             key = ("vpp_object_contents", endpoints[0]["source"], len(calls))
             calls[key] = ReturnCall(
                 key,
@@ -768,6 +1157,14 @@ def _returned_flows(
             ]
         return result
 
+    ## Collect bounded return-flow candidates for the current forwarding path
+    ## 收集当前转发路径中的有界返回流候选
+    #
+    #  @param values Abstract values propagated through the analysis
+    #  @param owner Indexed source function owning the returned values
+    #  @param owner_analysis Producer analysis for the owning function
+    #  @param remaining Forwarding depth left for the analysis
+    #  @param stack Call path used to bound recursive collection
     def collect(values, owner, owner_analysis, remaining, stack):
         owner_calls = {call.id: call for call in direct_calls(owner_analysis, owner.identity)}
         for value in values:
@@ -835,6 +1232,13 @@ def _returned_flows(
                 for item in producer.argument_sources
                 if item.get("parameter") is not None
             )
+            captured = {flow["target_capture"] for flow in
+                        _capture_flows(context, owner_analysis, state, producer)}
+            bindings += tuple(
+                CallBinding("capture", item["capture"], tuple(safe_values(
+                    item.get("current_sources", ()), owner, owner_analysis, producer, remaining - 1,
+                ))) for item in producer.capture_bindings if item.get("capture") in captured
+            )
             returns = next(
                 (
                     item.get("returns", ())
@@ -843,7 +1247,9 @@ def _returned_flows(
                 ),
                 (),
             )
-            returns = safe_values(returns, definition, child, definition.node, remaining - 1)
+            returns = safe_values(
+                returns, definition, child, definition.node, remaining - 1, captured,
+            )
             summaries[definition.identity] = returns
             calls[producer.id] = ReturnCall(producer.id, definition.identity, bindings)
             producers[producer.id] = producer
@@ -856,9 +1262,16 @@ def _returned_flows(
                 stack,
             )
 
+    ## Use identity only for the path; never recover its old input contents
+    ## 只用对象身份确定路径，不恢复该对象的旧输入内容
+    #
+    #  @param value Returned object record whose source context is traced
+    #  @param owner Indexed source function owning the returned object
+    #  @param owner_analysis Producer analysis for the owning function
+    #  @param remaining Forwarding depth left for the analysis
+    #  @param stack Call path used to bound recursive resolution
+    #  @return Proven object context path, or None when it cannot be established
     def object_context(value, owner, owner_analysis, remaining, stack=()):
-        """Use identity only for the path; never recover its old input contents."""
-
         producer = next(
             (
                 call
@@ -873,13 +1286,19 @@ def _returned_flows(
             )
             return None
         obj = value.get("container_object", {})
-        if not _proven_object_alias(value) or (
+        if obj.get('value_completeness') == 'unaffected_keys_only' and not (
+                preserved_mapping_remainder(owner_analysis, producer, value)):
+            boundary('return_object_unproven',
+                     'Mapping remainder evidence is incomplete.', producer)
+            return None
+        protocol = copy_protocol_target(owner, owner_analysis, producer, value)
+        if protocol is None and (not _proven_object_alias(value) or (
             producer.analysis_status != "analyzed"
             or producer.binding_status != "complete"
             or not producer.target
             or _target_status(owner_analysis, producer) != "resolved"
             or identity_from_target(obj["function"]) != identity_from_target(producer.target)
-        ):
+        )):
             boundary("return_object_unproven", "Returned object identity is incomplete.", producer)
             return None
         if producer.id in stack:
@@ -895,17 +1314,27 @@ def _returned_flows(
             boundaries.extend(body_boundaries)
             return None
         producers[producer.id] = producer
-        incoming = [
-            source
-            for item in producer.argument_sources
-            if item.get("parameter") == obj["parameter"]
-            for source in item.get("sources", ())
-            if source.get("object_only")
-        ]
+        if protocol is not None:
+            protocols[producer.id] = protocol
+            incoming = [source for source in (
+                *producer.receiver_sources,
+                *(source for item in producer.argument_sources
+                  for source in item.get("sources", ())),
+            ) if source.get("object_only")]
+            input_object = obj["copied_from"]
+        else:
+            incoming = [
+                source
+                for item in producer.argument_sources
+                if item.get("parameter") == obj["parameter"]
+                for source in item.get("sources", ())
+                if source.get("object_only")
+            ]
+            input_object = obj["source"]
         if not incoming:
             return (producer.id,)
         if len(incoming) != 1 or (
-            incoming[0].get("container_object", {}).get("source") != obj["source"]
+            incoming[0].get("container_object", {}).get("source") != input_object
         ):
             boundary(
                 "return_object_unproven", "Returned object contexts are conflicting.", producer
@@ -932,6 +1361,8 @@ def _returned_flows(
         if resolution.status != "converged":
             boundary("return_flow_limit_reached", "Return dependency budget reached.", destination)
         for flow in resolution.paths:
+            if not conditions_possible(context, flow):
+                continue
             steps = []
             for call_id in flow.get("call_context", ()):
                 producer = producers[call_id]
@@ -954,7 +1385,8 @@ def _returned_flows(
                         parameter,
                         producer.callee_name,
                         call_span(producer),
-                        identity_from_target(producer.target),
+                        protocols.get(producer.id) or identity_from_target(producer.target),
+                        "local_container_protocol" if producer.id in protocols else "resolved",
                     )
                 )
             result.append(
@@ -970,19 +1402,30 @@ def _returned_flows(
     return result
 
 
+## Resolve a call target to one indexed source definition
+## 将调用目标解析为唯一索引源码定义
+#
+#  @param context Reusable analysis context for the selected source snapshot
+#  @param target Source identity of the target to resolve
+#  @return Matching indexed function, or None if it cannot be resolved uniquely
 def _target_definition(
-    context: AnalysisContext, target: FunctionIdentity
-) -> Optional[IndexedFunction]:
+    context, target
+):
     return (
-        context.index.find_by_location(target.file_path, target.lineno)
+        context.index.find_by_location(target.file_path, target.lineno, identity=target)
         if target.file_path and target.lineno
         else context.index.find(target)
     )
 
 
-def _return_binding_path(item: dict, function: IndexedFunction, root_kind: VariadicKind) -> tuple:
-    """Flatten only PCResolve's exact expansion-to-capture wildcard binding."""
-
+## Flatten only PCResolve's exact expansion-to-capture wildcard binding
+## 仅展开PCResolve精确记录的展开到捕获通配符绑定
+#
+#  @param item Producer argument binding record
+#  @param function Indexed source function under analysis
+#  @param root_kind Variadic channel kind at the root API
+#  @return Binding path, with a proven capture wildcard flattened when applicable
+def _return_binding_path(item, function, root_kind):
     path = tuple(item.get("target_path", ()))
     argument = item.get("argument")
     if path != ("*",) or not isinstance(argument, dict):
@@ -1000,9 +1443,13 @@ def _return_binding_path(item: dict, function: IndexedFunction, root_kind: Varia
     return () if formal is not None and item.get("parameter") == formal else path
 
 
-def _capture_return_value(value: dict, function: IndexedFunction) -> dict:
-    """Flatten only a capture's element wildcard, retaining exact tuple slots."""
-
+## Flatten only a capture's element wildcard, retaining exact tuple slots
+## 仅展开捕获参数的元素通配符，同时保留精确tuple槽位
+#
+#  @param value Producer return value record to normalize
+#  @param function Indexed source function under analysis
+#  @return Original or normalized return value record
+def _capture_return_value(value, function):
     path = value.get("output_path", ())
     if (
         value.get("kind") == "parameter"
@@ -1015,35 +1462,50 @@ def _capture_return_value(value: dict, function: IndexedFunction) -> dict:
     return value
 
 
+## Unknown effects on a returned alias must not restore open contents
+## 确保返回别名上的未知副作用不会重新开放容器内容
+#
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param owner Indexed source function owning the returned value
+#  @param value Returned alias record whose source effects are inspected
+#  @param destination Source call or node where the returned value is read
+#  @return Span of an obscuring operation, or None when no such operation is found
 def _return_operation_boundary(
-    analysis: Any, identity: FunctionIdentity, value: dict, destination: Any
-) -> Optional[SourceSpan]:
-    """Unknown effects on a returned alias must not restore open contents.
-
-    This does not infer interprocedural purity. Passing the carrier to an
-    additional ordinary call before reading it leaves its contents unproved.
-    The producer call currently being bound is not such a prior side effect.
-    """
-
+    analysis, owner, value, destination
+):
     endpoint = (
         destination.end_lineno or destination.lineno,
         destination.end_col_offset or destination.col_offset,
     )
-    for call in direct_calls(analysis, identity):
+    for call in direct_calls(analysis, owner.identity):
         if call.id == getattr(destination, "id", None):
             continue
         if (call.lineno, call.col_offset) > endpoint:
             continue
+
         # This narrow PCResolve proof already excludes unknown helper effects.
         # It is not a purity inference from a name or an input dependency.
-        if call.result_sources and all(
+        # 该窄范围PCResolve证明已排除未知辅助函数副作用；不能仅凭名称或输入依赖推断函数纯净。
+        remainder = any(effect.get('kind') == 'mapping_remainder' for effect in call.effects)
+        if call.result_sources and not remainder and all(
             _proven_object_alias(source) for source in call.result_sources
         ):
             continue
+        if len(call.result_sources) == 1 and copy_protocol_target(
+            owner, analysis, call, call.result_sources[0]
+        ) is not None:
+            continue
         if _modeled_mapping_removal(analysis, call):
+
             # Only remove the unknown-effect barrier. Current content facts,
             # not this normal-return postcondition, still determine forwarding.
+            # 此证明只移除未知副作用边界；转发结论仍由当前容器内容事实决定。
             continue
+        if preserved_mapping_remainder(analysis, call, value):
+            continue
+        if (value.get('source') == call.id and value.get('container_object', {}).get(
+                'value_completeness') == 'unaffected_keys_only'):
+            return call_span(call)
         receiver = call.receiver_sources if call.target_status == "receiver_unresolved" else ()
         ordinary = (
             source
@@ -1068,9 +1530,12 @@ def _return_operation_boundary(
     return None
 
 
-def _proven_object_alias(value: dict) -> bool:
-    """Recognize a complete identity fact, not an element dependency."""
-
+## Recognize a complete identity fact, not an element dependency
+## 识别完整对象身份事实，不将元素依赖当作对象别名
+#
+#  @param value Producer return record to check for exact object identity
+#  @return Whether the record proves an exact direct returned-object alias
+def _proven_object_alias(value):
     obj = value.get("container_object", {})
     return bool(
         value.get("object_only")
@@ -1087,9 +1552,13 @@ def _proven_object_alias(value: dict) -> bool:
     )
 
 
-def _modeled_mapping_removal(analysis: Any, call: Any) -> bool:
-    """Recognize complete bounded effects, not purity from a helper's spelling."""
-
+## Recognize complete bounded effects, not purity from a helper's spelling
+## 识别完整且有界的映射修改效果，不凭辅助函数名称推断纯度
+#
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param call PCResolve producer call record being analyzed
+#  @return Whether the call's mapping removals have complete bounded evidence
+def _modeled_mapping_removal(analysis, call):
     if (
         not call.target
         or _target_status(analysis, call) != "resolved"
@@ -1122,11 +1591,17 @@ def _modeled_mapping_removal(analysis: Any, call: Any) -> bool:
     )
 
 
+## Do not assume a helper's generic formal survives unknown receiver effects
+## 避免在接收者副作用未知时假设通用形参保持不变
+#
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param identity Source-level identity used for lookup
+#  @param parameter Parameter name or parameter fact being checked
+#  @param destination Producer call where the carrier is consumed
+#  @return Span of an unresolved receiver operation, or None if none was found
 def _carrier_operation_boundary(
-    analysis: Any, identity: FunctionIdentity, parameter: str, destination: Any
-) -> Optional[SourceSpan]:
-    """Do not assume a helper's generic formal survives unknown receiver effects."""
-
+    analysis, identity, parameter, destination
+):
     destination_end = (
         destination.end_lineno or destination.lineno,
         destination.end_col_offset or destination.col_offset,
@@ -1146,22 +1621,13 @@ def _carrier_operation_boundary(
     return None
 
 
-def _target_status(analysis: Any, call: Any) -> str:
-    if call.target_status != "resolved":
-        return call.target_status
-    if any(
-        boundary.get("call_id") == call.id
-        and boundary.get("reason", "").startswith("dynamic_")
-        and boundary.get("reason") != "dynamic_argument_expansion"
-        for boundary in analysis.boundaries
-    ):
-        return "source_candidate"
-    return "resolved"
-
-
-def _callee_body_boundaries(analysis: Any, call: Any) -> tuple[AnalysisBoundary, ...]:
-    """Callable identity does not prove an effect-uncertain body is unchanged."""
-
+## Callable identity does not prove an effect-uncertain body is unchanged
+## 避免仅凭可调用对象身份认定函数体无不确定副作用
+#
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param call PCResolve producer call record being analyzed
+#  @return Boundaries for unmodeled decorator effects, or an empty tuple
+def _callee_body_boundaries(analysis, call):
     reason = "identity_decorator_effects_unmodeled"
     if not any(
         boundary.get("call_id") == call.id and boundary.get("reason") == reason
@@ -1182,14 +1648,24 @@ def _callee_body_boundaries(analysis: Any, call: Any) -> tuple[AnalysisBoundary,
     )
 
 
+## Collect scope and flow limits relevant to one scan channel
+## 收集与单个扫描通道相关的作用域及数据流限制
+#
+#  @param analysis PCResolve analysis result being validated or consumed
+#  @param identity Source-level identity used for lookup
+#  @param relevant_calls Producer call identifiers relevant to the scan channel
+#  @param parameter Parameter name or parameter fact being checked
+#  @return Iterator of relevant analysis boundaries
 def _analysis_boundaries(
-    analysis: Any, identity: FunctionIdentity, relevant_calls: set
-) -> Iterable[AnalysisBoundary]:
+    analysis, identity, relevant_calls, parameter
+):
     calls = {call.id: call for call in direct_calls(analysis, identity)}
     for boundary in analysis.boundaries:
         reason = boundary.get("reason", "unspecified")
+
         # The scanner composes its own depth-limited container paths. Unknown
         # expansion elements are its input, not concrete client-binding errors.
+        # 扫描器自行组合受深度限制的容器路径；未知展开元素属于扫描输入，不是具体客户端调用绑定错误。
         if reason in {"depth_limit", "dynamic_argument_expansion"}:
             continue
         owner = boundary.get("function")
@@ -1199,13 +1675,35 @@ def _analysis_boundaries(
             if identity_from_target(analysis.entry) != identity:
                 continue
         call_id = boundary.get("call_id")
+        affected = boundary.get("affected_values", ())
+        if boundary.get("affected_scope") == "none":
+            continue
+        if boundary.get("affected_scope") == "known" and affected and not any(
+            _parameter_dependency(value, parameter) for value in affected
+        ):
+            continue
         if call_id and call_id not in relevant_calls:
-            if call_id not in calls or reason not in {
-                "unsupported_expression",
-                "receiver_unresolved",
-                "definition_unavailable",
-            }:
+            call = calls.get(call_id)
+            if call is None:
                 continue
+            protocol = getattr(call, "implicit_protocol", {})
+            implicit_exit = (
+                protocol.get("kind") == "context_manager_exit"
+                and protocol.get("method") == "__exit__"
+                and reason.startswith("context_exit_")
+            )
+
+        # Exit effects can affect the pending frame without receiving its
+        # carrier as an argument. Their affected roots, not forwarding-call
+        # membership, determine whether coverage is limited for this channel.
+        # 退出副作用即使未将载体作为参数，也可能影响待处理帧；该通道是否受限取决于受影响根，而非是否属于转发调用。
+            if not implicit_exit:
+                if reason not in {
+                    "unsupported_expression",
+                    "receiver_unresolved",
+                    "definition_unavailable",
+                } or not _call_depends_on_parameter(call, parameter):
+                    continue
         yield AnalysisBoundary(
             "pcresolve_" + reason,
             "PCResolve boundary: {}.".format(reason),

@@ -1,4 +1,6 @@
-"""Robust Python source-encoding selection."""
+## @package vppdetector.encoding
+#  Select source encodings and retain the compatibility helper.
+#  选择源码编码并保留兼容性辅助接口。
 
 from __future__ import annotations
 
@@ -9,12 +11,18 @@ from typing import Union
 
 import chardet
 
+
 PathLike = Union[str, Path]
 
 
-def get_encoding(file_path: PathLike) -> str:
-    """Return an encoding that is verified to decode the complete file."""
-
+## Return an encoding that is verified to decode the complete file
+## 选择能够完整解码源码文件的字符编码
+#
+#  @param file_path Path of the source file
+#  @return Encoding name that decodes the entire file
+#  @exception OSError If the file cannot be read
+#  @exception UnicodeError If none of the candidate encodings can decode it
+def get_encoding(file_path):
     raw_data = Path(file_path).read_bytes()
     candidates = []
 
@@ -45,7 +53,12 @@ def get_encoding(file_path: PathLike) -> str:
     raise UnicodeError("No usable encoding found for {}".format(file_path))
 
 
-def getEncoding(filePath: PathLike) -> str:
-    """Compatibility alias for the VPPDetector 1.0 public helper."""
-
+## Compatibility alias for the VPPDetector 1.0 public helper
+## 保留VPPDetector 1.0旧版公开辅助函数的兼容别名
+#
+#  @param filePath Source file path
+#  @return Encoding name that decodes the entire file
+#  @exception OSError If the file cannot be read
+#  @exception UnicodeError If none of the candidate encodings can decode it
+def getEncoding(filePath):
     return get_encoding(filePath)

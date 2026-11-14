@@ -1,4 +1,6 @@
-"""Standalone entry point for whole-package VPP risk scanning."""
+## @package vppdetector
+#  Standalone command-line entry point for VPP scanning.
+#  VPP扫描功能的独立命令行入口。
 
 from __future__ import annotations
 
@@ -12,7 +14,12 @@ from typing import Any, Optional, Sequence
 from vppdetector import ScanReport, scan_package
 
 
-def _to_data(value: Any) -> Any:
+## Convert report values into JSON-serializable data
+## 将报告值转换为可序列化的JSON数据
+#
+#  @param value Value or producer record being interpreted
+#  @return The value converted to JSON-compatible containers and scalars
+def _to_data(value):
     if is_dataclass(value):
         data = {field.name: _to_data(getattr(value, field.name)) for field in fields(value)}
         if isinstance(value, ScanReport):
@@ -31,7 +38,11 @@ def _to_data(value: Any) -> Any:
     return value
 
 
-def build_parser() -> argparse.ArgumentParser:
+## Create the command-line argument parser
+## 创建命令行参数解析器
+#
+#  @return Configured parser for package root, import roots, depth and output
+def build_parser():
     parser = argparse.ArgumentParser(description="scan one package version for VPP risks")
     parser.add_argument("package_root", type=Path)
     parser.add_argument("--import-root", action="append", type=Path, default=[])
@@ -40,7 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+## Run a whole-package scan and serialize its report
+## 执行全包扫描并序列化报告
+#
+#  @param argv Optional command-line arguments; defaults to process arguments
+#  @return Zero after a successful scan and report write
+def main(argv=None):
     arguments = build_parser().parse_args(argv)
     report = scan_package(
         arguments.package_root,

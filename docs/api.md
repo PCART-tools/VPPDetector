@@ -83,14 +83,35 @@ JSON.
 | `variadic_functions` | Variadic entries with their parameter names and `VariadicKind` channels. |
 | `findings` | Root API, variadic channel, downstream target, source locations and forwarding path. |
 | `boundaries` | Unresolved targets, unsupported effects and other analysis limits. |
+| `coverage` | One `VariadicCoverage` record per root variadic channel: observed status, finding count and boundary codes. |
 | `target_api` / `resolved_api` | Requested and resolved implementation identities for an on-demand scan; absent for a whole-package scan. |
 | `analyzer_schema_version` | PCResolve program-fact schema version. |
 
 Each `ForwardingFinding` retains the root function, variadic parameter name and
 kind, callee expression, callsite, target, reason code and path.
-`ForwardingStep` records a source-resolved hop. Findings and steps retain
+`ForwardingStep` records a source or proven builtin-protocol hop. Findings and steps retain
 `target_status`; findings can also retain target candidates and receiver-type
 evidence.
+
+Paths may include source-proven builtin copy/conversion steps. These steps use
+the `builtins` module, omit unavailable source locations and retain
+`target_status="local_container_protocol"`. Each copy/conversion consumes one
+forwarding hop, including copies composed with source-return and closure paths.
+
+Scan boundaries retain the implementation owner in `function` and, when a
+root channel is known, its `root_function`, `parameter_name` and
+`parameter_kind`. API scans use the requested identity for the root and the
+actual implementation for the diagnostic owner. Source-scope boundaries and
+assessment boundaries need not have a root channel.
+
+`VariadicCoverage.status` is `unavailable` when the root flow analysis fails,
+`limited` when relevant or source-scope boundaries are recorded, and
+`no_known_boundary` otherwise. The last status means no limitation was
+recorded by the supported analysis; it does not establish complete coverage
+or prove a negative. Findings can coexist with either of the other recorded
+limits. Each record also retains `finding_count`, unique `boundary_codes`
+and, for an API alias, its `implementation`. Missing API identities have no
+invented channels: `coverage` is empty and the entry boundary explains why.
 
 Enums serialize to lowercase strings, such as `var_keyword`; paths serialize
 to strings and tuples to arrays. See
@@ -102,6 +123,11 @@ difference between findings and analysis boundaries.
 `SourceContext.package_root` selects the source scope. An import root is the
 directory relative to which Python module names are formed, not necessarily
 the package directory itself.
+
+`SourceContext.dependency_modules` optionally names external module namespaces
+to include while discovering source dependencies; it defaults to an empty
+tuple. The corresponding files must still be resolvable through the configured
+import roots, and normal source and analysis limits continue to apply.
 
 In the quick-start example, the module is `example.api`, the function's
 `qualname` is `wrapper`, and its file is `example_lib/example/api.py`.
@@ -121,6 +147,13 @@ and the line must match the indexed definition. The file identifies library
 implementation code, not a client file.
 
 ### Reusable analysis context
+
+Within one context, syntax queries reuse source structures while compatibility
+proofs remain specific to each call. When PCResolve supports a shared
+`SourceStore`, source preparation and value-flow analysis reuse compatible ASTs
+through that explicit interface. Decoding policies and the selected file set
+remain separate, and reads still validate content. Older supported PCResolve
+versions retain independent source preparation.
 
 `AnalysisContext.from_source(source)` prepares a full-source context for
 whole-package scanning or multiple on-demand analyses in the same source
@@ -146,10 +179,33 @@ print(report.has_vpp)
 within the source root. It also works with `assess_change()`. Without a file
 hint it uses full-source preparation.
 
+For a concrete invocation, `CallContext` can additionally carry independently
+established `known_conditions`, `known_targets`, or `observed_keyword_checks`.
+`ObservedKeywordCheck` is an explicit trusted trace record, including the exact
+original call, entry/checker identities, primitive selected value, mapping and
+lookup slots, uncaught exception, raise span and source hashes. Assess checks
+it against PCResolve's neutral source guard before reporting an
+`observed_keyword_validation_rejection`. It does not execute a client script
+or collect these observations. These facts apply only to this invocation and
+never populate scan caches. See [supplied call facts](analysis-limits.md#supplied-call-facts)
+for the guarantees and limits. An assessment requiring these facts must be
+reported separately from unaided static results.
+
 A context must use the requested source root and import roots. Reuse it only
 for definitions and dependencies already in its fixed file set and while the
 source snapshot is unchanged. An entry outside that set needs a new context
 or a full-source context. Whole-package scanning requires a full-source context.
+
+Reusing a context checks the selected files' content hashes before consulting
+cached results. An edited or deleted selected file raises `ValueError`; a
+full-source context also detects added source files. Create a new context after
+changing the source. An API-scoped context promises freshness for its selected
+file set; changes elsewhere require preparing another context when they matter
+to the requested scope.
+
+Cached PCResolve facts are read-only. A missing required fact contract produces
+`pcresolve_fact_contract_unavailable` boundaries and an unresolved assessment,
+as described in the [fact consumption contract](fact-contract.md).
 
 ## Parameter-level assessment
 
@@ -219,13 +275,25 @@ Assessment can run directly, without a structural scan first.
 `ParameterAssessment` retains `target_api`, `resolved_api`, `change`, the
 normalized original `call_text` and an optional `callsite`. Its `state` is a
 `ParameterState` enum with serialized values `handled`, `rejected`, `ignored`
-and `unknown`. `reason` explains the outcome; `evidence` records supporting
+and `unknown`, plus `not_entered` for an unrelated, proved entry binding failure.
+`reason` explains the outcome; `evidence` records supporting
 bindings, uses and paths, and `boundaries` records analysis limits.
 
 Evidence with reason `normal_path_precondition` retains a condition required
 to proceed past a supported unrelated error-only guard. It is not an observed
 guard value. The result then describes parameter handling on that normal path;
 see [normal-path preconditions](analysis-limits.md#normal-path-preconditions).
+
+Evidence with reason `source_classmethod_binding` records PCResolve's
+source-snapshot assumptions for static classmethod signature binding. It does
+not represent an observed runtime target; see
+[binding evidence](analysis-limits.md#supplied-call-facts).
+
+Evidence with reason `ordinary_container_forwarding` records a supported helper
+hop carrying the selected finite dictionary or sequence contents. It is not a
+rejection or acceptance by itself. `proven_guard_rejection` records an explicit
+exception on a supported captured-key rejection branch; it does not establish
+that a proposed parameter deletion makes the entire program run successfully.
 
 See [assessment states](analysis-limits.md#assessment-states) for the meaning
 of each result.
@@ -239,7 +307,48 @@ of each result.
   receiver attribute paths, such as `(("self.closed", False),)`.
 - `known_targets`: exact library `SourceSpan` locations paired with confirmed
   `FunctionIdentity` implementations.
-- `callsite`: optional location of the original call.
+- `callsite`: optional full `SourceSpan` of the original call. When available,
+  assess asks PCResolve for bounded caller literals. It matches the exact call
+  syntax, import-backed API identity, argument slots, source spans and current
+  source hash before using a value. These are static, source-conditioned facts,
+  with assumptions recorded as `source_caller_arguments` evidence. The current
+  reader covers plain module-prefix imports and literal/alias assignments;
+  dynamic construction, mutations and effectful prefixes retain boundaries.
+  Missing or mismatched facts preserve syntax-only assessment. Caller facts
+  never enter library flow or scan caches. Selected containers still require
+  separate identity/element tracking and are not promoted to scalar values.
+- `execution_directory`: optional absolute path used as the base directory for
+  relative file paths in supported caller-side file-read facts. Without it,
+  those file contents are not recovered, though other caller facts may still
+  apply.
+- `observed_normal_returns`: bounded `ObservedNormalReturn` attestations for an
+  actual source-frame entry and normal dictionary return of the same original
+  call. The record includes the selected primitive, exact return span and source
+  hashes. HANDLED additionally requires a matching PCResolve fresh-mapping
+  retention proof; an observation alone is insufficient. These facts are trusted
+  caller input and are reported as observation-assisted evidence.
+- `observed_container_predicates`: bounded `ObservedContainerPredicate` records
+  for completed truth, membership or builtin-length predicates on an exact
+  builtin dictionary or tuple. The caller independently confirms the selected
+  element's origin, original-call normal completion, predicate outcome and
+  source hashes. Assess matches these against PCResolve source obligations;
+  missing or conflicting evidence remains unknown. This supplies a concrete
+  consumption witness without serializing argument values or object graphs.
+- `observed_attribute_retentions`: bounded `ObservedAttributeRetention` records
+  for an original class invocation that completes normally and retains the
+  same keyword capture and selected primitive in the returned instance's plain
+  attribute state. A matching PCResolve constructor-store obligation is also
+  required; the caller independently confirms construction and attribute
+  protocols, original receiver identity, completed store and final retention.
+- `observed_capture_rejections`: bounded `ObservedCaptureRejection` records for
+  an actual nonempty-dictionary rejection guard. The selected original primitive,
+  exact builtin dictionary type, completed true guard and escaping exception
+  must be independently confirmed and match a PCResolve source obligation.
+- `observed_fixed_bindings`: bounded `ObservedFixedBinding` records for the
+  original captured primitive reaching a fixed formal of an actual bound
+  method through one source `**mapping` call. The original call must complete
+  normally. Assess validates PCResolve's source call and target parameters,
+  the exact call scope, mapping expansion, method binding and source hashes.
 
 Known values accept `str`, `bytes`, `int`, `float`, `bool` and `None`;
 `None` is distinct from an unknown value. Names and known-target locations
