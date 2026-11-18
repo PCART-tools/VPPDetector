@@ -84,8 +84,17 @@ JSON.
 | `findings` | Root API, variadic channel, downstream target, source locations and forwarding path. |
 | `boundaries` | Unresolved targets, unsupported effects and other analysis limits. |
 | `coverage` | One `VariadicCoverage` record per root variadic channel: observed status, finding count and boundary codes. |
-| `target_api` / `resolved_api` | Requested and resolved implementation identities for an on-demand scan; absent for a whole-package scan. |
+| `target_api` / `resolved_api` | Requested and resolved implementation identities for an on-demand scan. Both are `None` for a whole-package scan. |
 | `analyzer_schema_version` | PCResolve program-fact schema version. |
+
+For an API scan, `target_api` retains the requested identity. When resolution
+succeeds, `resolved_api` identifies the implementation. When it is `None`,
+inspect `boundaries` for the cause. A `target_api_unavailable` boundary names
+the requested API in its `function` field when resolution returns no scannable
+implementation. A producer lookup failure can instead yield `flow_analysis_failed`
+for the same API. If the source scope contains no Python
+files, `no_python_sources` describes the scope and its `function` is `None`.
+In whole-package CLI output, both identity fields are present and set to `null`.
 
 Each `ForwardingFinding` retains the root function, variadic parameter name and
 kind, callee expression, callsite, target, reason code and path.
@@ -110,8 +119,8 @@ assessment boundaries need not have a root channel.
 recorded by the supported analysis; it does not establish complete coverage
 or prove a negative. Findings can coexist with either of the other recorded
 limits. Each record also retains `finding_count`, unique `boundary_codes`
-and, for an API alias, its `implementation`. Missing API identities have no
-invented channels: `coverage` is empty and the entry boundary explains why.
+and, for an API alias, its `implementation`. When the requested API is missing
+or the source scope is empty, `coverage` is empty and `boundaries` explains why.
 
 Enums serialize to lowercase strings, such as `var_keyword`; paths serialize
 to strings and tuples to arrays. See
@@ -176,8 +185,11 @@ print(report.has_vpp)
 ```
 
 `for_api()` indexes the located file, package initializers and explicit imports
-within the source root. It also works with `assess_change()`. Without a file
-hint it uses full-source preparation.
+within the source root. It can also include explicitly configured external
+dependencies and discover external sources reached by supported forwarding
+calls through the configured import roots. See [source selection limits](analysis-limits.md#source-scope-boundaries)
+for the bounds. It also works with `assess_change()`. Without a file hint it
+uses full-source preparation.
 
 For a concrete invocation, `CallContext` can additionally carry independently
 established `known_conditions`, `known_targets`, or `observed_keyword_checks`.
