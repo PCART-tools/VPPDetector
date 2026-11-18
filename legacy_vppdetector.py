@@ -1,8 +1,12 @@
 ## @package legacy_vppdetector
-#  Original prototype scanner retained for reproducibility.
-#  为复现早期研究结果而保留的原型扫描器。
-#  New integrations should import the vppdetector package instead.
-#  新集成应改为导入 vppdetector 包。
+#  Retain the research scanner for historical reproducibility.
+#
+#
+#  Retain the original scanner, including its dataset layout and helper dependencies, to
+#  reproduce historical results.
+#  保留原始扫描器及其数据集布局和辅助依赖，用于复现历史结果。
+
+
 
 import os
 import ast
@@ -229,6 +233,7 @@ class ClassAndFunctionVisitor(ast.NodeVisitor):
                     flag = 1
                     for d in node.decorator_list:
 
+                        # Exclude overload declarations from the detected implementation set.
                         # 若API定义中含有overload装饰器也排除
                         if "overload" in ast.unparse(d):
                             flag = 0
@@ -322,6 +327,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     def findCallDef(self, callName, node, flag = 0):
         positionLst = []
 
+        # One call name can match multiple declarations.
         # 寻找callAPI定义的位置（可能会找到多个同名的API）
         self._findAPIPosition.setAPIName(callName)
         if flag == 0:
@@ -345,6 +351,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     def findNoKwargCallDef(self, positionLst, varargFlag, kwargFlag):
         ansLst = []
 
+        # Use source locations to inspect matching call declarations.
         # 根据位置查找callAPI的定义
         self._callDefVisitor.setFlag(varargFlag, kwargFlag)
         for pos in positionLst:
@@ -363,11 +370,13 @@ class FunctionDefVisitor(ast.NodeVisitor):
     #  @return None
     def visit_ClassDef(self, node):
 
+        # Track the enclosing class while visiting methods.
         # 进入一个类定义时，当前类名进栈
         self._classStack.append(node.name)
         self._classNodeStack.append(node)
         self.generic_visit(node)
 
+        # Restore the outer class scope after visiting this body.
         # 离开类定义时，从栈中弹出类名和类节点
         self._classStack.pop()
         self._classNodeStack.pop()
@@ -379,6 +388,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
     #  @return None
     def visit_FunctionDef(self, node):
 
+        # Collect the declared parameters used by the historical scan.
         # 获取API定义中的参数
         paraLst = []
         for para in node.args.args + node.args.kwonlyargs:
@@ -398,6 +408,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
         except:
             kwargFlag = False
 
+        # Start with definitions that accept at least one variadic channel.
         # step1: 找出参数定义中含有可变参数的API
         if varargFlag or kwargFlag:
             currentClass = '.'.join(self._classStack) if self._classStack else ""
@@ -408,12 +419,14 @@ class FunctionDefVisitor(ast.NodeVisitor):
             self.cnt1 += 1
             self.defWithVariadicParaLst.append({fullPathName: node.lineno})
 
+            # Inspect calls that receive the selected variadic channel.
             # step2: 再从函数体内找被传递*args或**kwargs的调用API
             self._callVisitor.setName(varargName, kwargName)
             self._callVisitor.dfsVisit(node)
             self.cnt2 += len(self._callVisitor.callDict)
             for callName, val in self._callVisitor.callDict.items():
 
+                # Skip callees supplied as function parameters.
                 # 如果调用API来自参数，则跳过
                 if callName in paraLst:
                     continue
@@ -422,6 +435,7 @@ class FunctionDefVisitor(ast.NodeVisitor):
                 varFlag = val[1]
                 kwFlag = val[2]
 
+                # Resolve the called name to candidate source locations.
                 # 寻找callName定义的位置
                 if 'self.' in callName:
                     callName = callName.replace("self.", "")
@@ -429,19 +443,23 @@ class FunctionDefVisitor(ast.NodeVisitor):
                 if len(self._classNodeStack) > 0:
                     tempNode = self._classNodeStack[-1]
 
+                    # For a self call, first look for the callee in the current class.
                     # 若是通过self进行调用的，则优先在当前类中查找调用函数的定义
                     callDefPosLst = self.findCallDef(callName, tempNode)
 
+                    # If the current class has no match, inspect other classes in this file.
                     # 若当前类找不到，则再从当前文件进行查找，但也只从类中查找
                     if len(callDefPosLst) == 0:
                         callDefPosLst = self.findCallDef(callName, self._root, 1)
                 else:
 
+                    # Unqualified calls are matched to ordinary functions.
                     # 只查找普通函数
                     callDefPosLst = self.findCallDef(callName, self._root, 2)
 
                 if len(callDefPosLst) > 0:
 
+                    # Keep the target candidates without the relevant variadic parameter.
                     # 再从这些API里筛选出参数定义中不含可变参数的API
                     callDefNoKwargPosLst = self.findNoKwargCallDef(callDefPosLst, varFlag, kwFlag)
                     if len(callDefNoKwargPosLst):
@@ -464,10 +482,12 @@ class FunctionDefVisitor(ast.NodeVisitor):
 #  @exception OSError If the source file cannot be read
 def getEncoding(filePath):
 
+    # Read raw bytes before choosing a source encoding.
     # 读取二进制文件内容
     with open(filePath, "rb") as f:
         raw_data = f.read()
 
+    # Use the byte sample to detect the encoding.
     # 自动检测文件编码
     result = chardet.detect(raw_data)
     encoding = result['encoding']
@@ -489,8 +509,8 @@ def getPrefix(filePath, libName):
             index=i
             break
 
-    # rstrip在去除的时候是不考虑字符的顺序的，比如"xxxxapi.py".rstrip(',pyi')就会出错
-    # s=filePath.split(f"{projName}")[-1].replace('/','.').rstrip('.pyi').rstrip('.py')
+    # Stripping a character set can remove part of the module name as well as its suffix.
+    # 按字符集合剥离后缀可能误删模块名的一部分，因此按最后一个点分隔后缀。
     s=filePath.split(f"{libName}")[-1].replace('/','.')
     pos=s.rfind('.')
     s=s[0:pos]
@@ -560,6 +580,7 @@ def getKwargAPI(libName):
                 dic[codeFile] = lst
                 visitor.lst.clear()
 
+        # Store the findings and declarations for this version.
         # 保存当前版本的情况
         fileName = lib.split("/")[-1]
         if len(defDict) > 0:
@@ -570,11 +591,14 @@ def getKwargAPI(libName):
             with open(f"KWARGS/VariadicParaPitfalls/{libName}/{fileName}.txt", 'w') as fw:
                 json.dump(dic, fw, indent=4, ensure_ascii=False)
 
+        # Record the counts before resetting the visitor for the next version.
         # 保存当前版本库的计数
         cntDict[fileName] = (visitor.cnt1, visitor.cnt2, visitor.cnt3)
         visitor.cleanCnt()
 
     sortedDict=dict(sorted(cntDict.items(), key=lambda it: cmp(getVersion(it[0]))))
+    # The historical output uses the original traversal order from cntDict.
+    # 历史输出采用 cntDict 中的原始遍历顺序。
     sortedDict = cntDict
     with open(f"KWARGS/VariadicParaPitfalls/{libName}/count", 'w') as fw:
         json.dump(sortedDict, fw, indent=4, ensure_ascii=False)
