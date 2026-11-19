@@ -93,7 +93,8 @@ and output models.
 
 | File | Responsibility |
 | --- | --- |
-| [`vppdetector.py`](../vppdetector.py) | Standalone whole-package scan CLI and JSON serialization. |
+| [`vppdetector.py`](../vppdetector.py) | Source-checkout entry point that invokes the packaged CLI. |
+| [`vppdetector/cli.py`](../vppdetector/cli.py) | Whole-package scan CLI, argument parsing and JSON serialization. |
 | [`vppdetector/__init__.py`](../vppdetector/__init__.py) | Public Python interfaces. |
 | [`vppdetector/models.py`](../vppdetector/models.py) | Source identities, findings and parameter-level evidence. |
 | [`vppdetector/source/discovery.py`](../vppdetector/source/discovery.py) | Source roots, Python file discovery and module names. |

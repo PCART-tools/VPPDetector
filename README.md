@@ -23,13 +23,20 @@ variadic channel; `no_known_boundary` does not certify complete coverage.
 - Python 3.9 or newer
 - PCResolve 1.0.8 or newer (`pcresolve>=1.0.8`)
 
-From this checkout, install the package in editable mode:
+Install from PyPI:
+
+```shell
+python -m pip install vppdetector
+```
+
+To install from a source checkout in editable mode, run:
 
 ```shell
 python -m pip install -e .
 ```
 
-This installs PCResolve and the other declared dependencies. PCResolve supplies
+Installation provides the `vppdetector` command and the Python package, along
+with PCResolve and the other declared dependencies. PCResolve supplies
 program facts and call resolution in the analyzer's Python environment; the
 analyzed library does not need to be installed or imported.
 
@@ -62,7 +69,7 @@ def consumed(**kwargs):
 Scan the source and print a JSON report:
 
 ```shell
-python vppdetector.py example_lib
+vppdetector example_lib
 ```
 
 The report includes a finding for `wrapper` forwarding `**kwargs` to the fixed
@@ -71,11 +78,13 @@ signature of `target`, with `has_vpp: true`.
 Write the report to a file:
 
 ```shell
-python vppdetector.py example_lib --output report.json
+vppdetector example_lib --output report.json
 ```
 
-Run `python vppdetector.py --help` for all options. The default forwarding depth
+Run `vppdetector --help` for all options. The default forwarding depth
 is five hops; use `--import-root` when the library needs an explicit module root.
+From a source checkout, `python vppdetector.py example_lib` invokes the same
+CLI when its dependencies are installed.
 
 ## Python API
 

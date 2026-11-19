@@ -10,8 +10,8 @@ The examples use the source layout and three functions from the
 ## Whole-package CLI
 
 ```shell
-python vppdetector.py example_lib
-python vppdetector.py example_lib --output report.json
+vppdetector example_lib
+vppdetector example_lib --output report.json
 ```
 
 | Argument | Meaning |
@@ -21,7 +21,9 @@ python vppdetector.py example_lib --output report.json
 | `--max-depth` | Positive forwarding-hop limit, default five. Source-resolved return-producing calls also count as hops. |
 | `--output` | JSON destination in an existing directory. Without it, the report is printed to standard output. |
 
-Run `python vppdetector.py --help` for the option list.
+Run `vppdetector --help` for the option list. From a source checkout,
+`python vppdetector.py example_lib` invokes the same CLI when its dependencies
+are installed.
 
 ## Python interfaces
 
