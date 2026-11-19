@@ -142,7 +142,6 @@ and output models.
 | [`src/vppdetector/assess/observations/contextvar_packages.py`](../src/vppdetector/assess/observations/contextvar_packages.py) | Reads and indexes package source, resolves source targets, and assembles one bounded package proof. |
 | [`src/vppdetector/assess/observations/contextvar_package_scan.py`](../src/vppdetector/assess/observations/contextvar_package_scan.py) | Performs the bounded worklist traversal and applies call-specific ContextVar write rules using an explicit package scan state. |
 | [`src/vppdetector/assess/observations/__init__.py`](../src/vppdetector/assess/observations/__init__.py) | Internal observation service exports. |
-| [`src/vppdetector/encoding.py`](../src/vppdetector/encoding.py) | Retained encoding helper; source indexing uses Python's declared source encoding. |
 
 The scan cache keys results by entry identity, depth and the entry's class
 and alias query. It copies mutable producer evidence when storing results and
@@ -157,7 +156,7 @@ the proof.
 
 The original implementation is retained in
 [`legacy_vppdetector.py`](../legacy_vppdetector.py) for reproducibility. It
-requires the original `Path.getPath` and `Tool.tool` helper modules and
+requires `chardet`, the original `Path.getPath` and `Tool.tool` helper modules, and
 contains dataset-specific paths. The current scan entry point is
 `vppdetector.cli`.
 

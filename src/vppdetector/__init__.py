@@ -9,7 +9,6 @@
 
 from ._analysis_context import AnalysisContext
 from .assessment import assess_change
-from .encoding import get_encoding
 from .facts.adapter import ResolutionError
 from .models import (
     AnalysisBoundary,
@@ -65,7 +64,6 @@ __all__ = [
     "VariadicCoverage",
     "VariadicKind",
     "assess_change",
-    "get_encoding",
     "scan_api",
     "scan_package",
 ]
