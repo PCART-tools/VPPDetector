@@ -1,4 +1,4 @@
-## @package vppdetector
+## @package vppdetector.cli
 #  Standalone command-line entry point for VPP scanning.
 #
 #
@@ -13,8 +13,8 @@ from dataclasses import fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 
-from vppdetector.models import ScanReport, asdict_record
-from vppdetector.scanner import scan_package
+from .models import ScanReport, asdict_record
+from .scanner import scan_package
 
 
 ## Convert report values into JSON-serializable data
@@ -22,7 +22,7 @@ from vppdetector.scanner import scan_package
 #
 #  @param value Value or producer record being interpreted
 #  @return The value converted to JSON-compatible containers and scalars
-def _to_data(value) :
+def _to_data(value):
 
     # Include the computed risk flag alongside the report's stored fields for CLI consumers.
     # CLI 输出除报告字段外，还包含计算得到的风险标志。
@@ -51,7 +51,7 @@ def _to_data(value) :
 ## 创建命令行参数解析器
 #
 #  @return Configured parser for package root, import roots, depth and output
-def build_parser() :
+def build_parser():
     parser = argparse.ArgumentParser(description="scan one package version for VPP risks")
     parser.add_argument("package_root", type=Path)
     parser.add_argument("--import-root", action="append", type=Path, default=[])
@@ -65,7 +65,7 @@ def build_parser() :
 #
 #  @param argv Optional command-line arguments; defaults to process arguments
 #  @return Zero after a successful scan and report write
-def main(argv = None) :
+def main(argv=None):
     arguments = build_parser().parse_args(argv)
     report = scan_package(
         arguments.package_root,
@@ -78,7 +78,3 @@ def main(argv = None) :
     else:
         print(text)
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

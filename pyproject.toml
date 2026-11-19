@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vppdetector"
 version = "1.1.0"
-description = "Detect variadic-parameter pitfalls and analyze argument handling in Python libraries"
+description = "Detect compatibility risks from variadic argument forwarding in Python library APIs"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "AGPL-3.0-only"
@@ -16,8 +16,18 @@ dependencies = [
     "pcresolve>=1.0.8",
 ]
 
+[project.scripts]
+vppdetector = "vppdetector.cli:main"
+
+[project.urls]
+Source = "https://github.com/PCART-tools/VPPDetector"
+Documentation = "https://github.com/PCART-tools/VPPDetector#documentation"
+Issues = "https://github.com/PCART-tools/VPPDetector/issues"
+
 [tool.setuptools.packages.find]
-include = ["vppdetector*"]
+where = ["src"]
+include = ["vppdetector", "vppdetector.*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
