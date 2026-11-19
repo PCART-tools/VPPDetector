@@ -1,10 +1,10 @@
 ## What is VPPDetector?
 
-VPPDetector detects potential variadic-parameter pitfalls in Python library
-source. A VPP occurs when a library API's `*args` or `**kwargs` propagates to
-a downstream expansion whose signature lacks the corresponding variadic
-parameter. Findings identify the root API, parameter channel, forwarding
-path and source locations.
+VPPDetector detects compatibility risks from variadic argument forwarding in
+Python library APIs. A variadic-parameter pitfall (VPP) occurs when a library
+API's `*args` or `**kwargs` propagates to a downstream expansion whose target
+signature lacks the corresponding variadic parameter. Findings identify the
+root API, parameter channel, forwarding path and source locations.
 
 VPPDetector provides three Python interfaces:
 
