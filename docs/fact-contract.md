@@ -148,8 +148,10 @@ can otherwise retain modules removed from the current source tree.
 One context fixes its file set, import roots and producer configuration. Root
 analysis caching uses the located function and requested depth within that
 context. Expansion caching uses the identity of the complete parent snapshot
-and call ID, retaining the parent so its identity cannot be reused. Incoming
-receiver/callable contexts remain part of that parent, rather than a cache key
+and call ID, retaining the parent so its identity cannot be reused. Ordinary,
+isolated and isolated-with-lineage expansions use distinct cache entries for
+the same parent and call ID. Incoming receiver/callable contexts remain part of
+that parent, rather than a cache key
 consisting only of the callee name.
 
 Cached records and nested dictionaries/lists reject ordinary mutation. A
@@ -208,10 +210,12 @@ snapshot and validates its `inputs.expansion_context` against the exact edge,
 caller, target and entry. Scan still checks every incoming call record and
 class/instance requirement before propagating the variadic carrier. Recursion
 keys include the producer's incoming parameter facts; unchanged contexts and
-the scan depth budget still stop traversal. Assessment retains ordinary
-expansion behavior. Finite generated source dispatch tables arrive through the
-existing producer candidate facts; VPPDetector does not evaluate comprehensions
-or reflective namespace expressions.
+the scan depth budget still stop traversal. When assessment follows a producer
+call edge carrying tracked values or captures into a target body, it requests
+`isolate=True, preserve_lineage=True`. For a source-inferred target it instead
+analyzes that target in its inferred context. Finite generated source dispatch
+tables arrive through the existing producer candidate facts; VPPDetector does
+not evaluate comprehensions or reflective namespace expressions.
 
 Assessment can consume `builtin_scalar_truth` only after validating its call,
 source hash, binding, input precondition and every incoming protocol record.

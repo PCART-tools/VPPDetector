@@ -1,18 +1,17 @@
 ## @package vppdetector.encoding
-#  Select source encodings and retain the compatibility helper.
-#  选择源码编码并保留兼容性辅助接口。
+#  Select source encodings.
+#
+#
+#  Select an encoding by checking that the full source file decodes under the candidate.
+#  校验候选字符编码能否解码完整源码文件，据此选择编码。
 
-from __future__ import annotations
+
 
 import io
 import tokenize
 from pathlib import Path
-from typing import Union
 
 import chardet
-
-
-PathLike = Union[str, Path]
 
 
 ## Return an encoding that is verified to decode the complete file
@@ -32,6 +31,8 @@ def get_encoding(file_path):
     except SyntaxError:
         pass
 
+    # Try UTF-8 before the detector's guess, then fall back to a byte-preserving encoding.
+    # 先尝试 UTF-8，再尝试检测结果，最后回退到可解码所有字节值的编码。
     candidates.append("utf-8-sig")
     detected = chardet.detect(raw_data).get("encoding")
     if detected:
@@ -51,14 +52,3 @@ def get_encoding(file_path):
         return encoding
 
     raise UnicodeError("No usable encoding found for {}".format(file_path))
-
-
-## Compatibility alias for the VPPDetector 1.0 public helper
-## 保留VPPDetector 1.0旧版公开辅助函数的兼容别名
-#
-#  @param filePath Source file path
-#  @return Encoding name that decodes the entire file
-#  @exception OSError If the file cannot be read
-#  @exception UnicodeError If none of the candidate encodings can decode it
-def getEncoding(filePath):
-    return get_encoding(filePath)

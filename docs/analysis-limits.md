@@ -218,9 +218,20 @@ entry does not prove the branch is active at runtime. Duplicate conditional
 names require an exact location, and constant-inactive definition conditions
 cannot supply a forwarding path.
 
-API-scoped preparation follows explicit imports within the source root.
-Dynamic dependencies are not inferred, so an import closure describes a
-bounded source scope rather than complete runtime coverage.
+API-scoped preparation follows explicit imports within the source root. An
+explicit `SourceContext.dependency_modules` entry allows its namespace to be
+resolved through the configured import roots. External files are selected when
+they match forwarding targets. For a located API, a supported
+forwarding call can also lead discovery to external source through those roots.
+For example, an imported external helper receiving a forwarded variadic
+container can bring its source into the selected closure. Automatic discovery
+is limited to 16 external top-level namespaces; exceeding the limit records
+`external_dependency_module_limit`. Explicitly configured namespaces are
+separate from that automatic-discovery count. Dynamic dependencies are not
+inferred, so the closure is a bounded source scope. Traversal also permits at
+most four external namespace crossings and 128 external source files, recording
+`external_dependency_depth_limit` or `external_dependency_file_limit` when
+the corresponding limit is exceeded.
 
 Reuse an analysis context only within its fixed file set and unchanged source
 snapshot. An API-scoped context cannot be used for whole-package scanning.
@@ -347,7 +358,7 @@ can be decided without comparing payloads. A finite `and`/`or` tree of local
 outcomes give the same final Boolean. Calls, attributes, custom truth protocols
 and other comparisons do not acquire this branch proof.
 
-One separate source-backed case handles a caller guard that tests an imported
+One separate source-backed case handles a caller guard that checks an imported
 ContextVar proxy for truth. Assessment records the guard as false only when the
 exact caller prefix and source versions are validated, the proxy's boolean
 fallback is proven false while unbound, the ContextVar has no default, and no

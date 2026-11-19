@@ -1,10 +1,16 @@
 ## @package vppdetector
 #  Public scan and assess interfaces backed by PCResolve.
-#  基于PCResolve事实提供公开的扫描与评估接口。
+#
+#
+#  Export the public context, scanning and assessment interfaces and their result models.
+#  导出公开的分析上下文、扫描和评估入口及其结果模型。
 
+
+
+from ._analysis_context import AnalysisContext
 from .assessment import assess_change
-from .core import AnalysisContext, ResolutionError
-from .encoding import get_encoding, getEncoding
+from .encoding import get_encoding
+from .facts.adapter import ResolutionError
 from .models import (
     AnalysisBoundary,
     CallContext,
@@ -31,7 +37,6 @@ from .models import (
     VariadicKind,
 )
 from .scanner import scan_api, scan_package
-
 
 __all__ = [
     "AnalysisBoundary",
@@ -60,7 +65,6 @@ __all__ = [
     "VariadicCoverage",
     "VariadicKind",
     "assess_change",
-    "getEncoding",
     "get_encoding",
     "scan_api",
     "scan_package",
