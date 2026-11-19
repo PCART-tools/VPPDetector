@@ -83,8 +83,8 @@ vppdetector example_lib --output report.json
 
 Run `vppdetector --help` for all options. The default forwarding depth
 is five hops; use `--import-root` when the library needs an explicit module root.
-From a source checkout, `python vppdetector.py example_lib` invokes the same
-CLI when its dependencies are installed.
+From a source checkout, install the project in editable mode and run the same
+`vppdetector` command.
 
 ## Python API
 

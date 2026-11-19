@@ -21,9 +21,8 @@ vppdetector example_lib --output report.json
 | `--max-depth` | Positive forwarding-hop limit, default five. Source-resolved return-producing calls also count as hops. |
 | `--output` | JSON destination in an existing directory. Without it, the report is printed to standard output. |
 
-Run `vppdetector --help` for the option list. From a source checkout,
-`python vppdetector.py example_lib` invokes the same CLI when its dependencies
-are installed.
+Run `vppdetector --help` for the option list. From a source checkout, install
+the project in editable mode and run the same command.
 
 ## Python interfaces
 

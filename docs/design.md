@@ -93,57 +93,56 @@ and output models.
 
 | File | Responsibility |
 | --- | --- |
-| [`vppdetector.py`](../vppdetector.py) | Source-checkout entry point that invokes the packaged CLI. |
-| [`vppdetector/cli.py`](../vppdetector/cli.py) | Whole-package scan CLI, argument parsing and JSON serialization. |
-| [`vppdetector/__init__.py`](../vppdetector/__init__.py) | Public Python interfaces. |
-| [`vppdetector/models.py`](../vppdetector/models.py) | Source identities, findings and parameter-level evidence. |
-| [`vppdetector/source/discovery.py`](../vppdetector/source/discovery.py) | Source roots, Python file discovery and module names. |
-| [`vppdetector/source/build.py`](../vppdetector/source/build.py) | Import-aware source graph construction and boundary collection. |
-| [`vppdetector/source/__init__.py`](../vppdetector/source/__init__.py) | Exports the current source indexing and query services. |
-| [`vppdetector/source/index.py`](../vppdetector/source/index.py) | Indexed functions, constructors, classes and source-location lookup. |
-| [`vppdetector/source/records.py`](../vppdetector/source/records.py) | Indexed source records and signatures. |
-| [`vppdetector/source/queries.py`](../vppdetector/source/queries.py) | Cached AST structure and syntax queries. |
-| [`vppdetector/_records.py`](../vppdetector/_records.py) | Shared record operations for source, facts, scanning and assessment. |
-| [`vppdetector/_analysis_context.py`](../vppdetector/_analysis_context.py) | Source preparation and reusable context that assembles the source and fact services and the consumer-specific caches. |
-| [`vppdetector/facts/adapter.py`](../vppdetector/facts/adapter.py) | Producer capability checks, source validation and read-only fact caching. |
-| [`vppdetector/facts/readonly.py`](../vppdetector/facts/readonly.py) | Immutable cached facts and mutable copies for isolated expansion. |
-| [`vppdetector/facts/calls.py`](../vppdetector/facts/calls.py) | Shared call identities, target status and validated call facts. |
-| [`vppdetector/facts/bindings.py`](../vppdetector/facts/bindings.py) | Source alias and class method binding proofs. |
-| [`vppdetector/facts/conditional_bindings.py`](../vppdetector/facts/conditional_bindings.py) | Conditional lookup and signature-only binding facts. |
-| [`vppdetector/facts/conditions.py`](../vppdetector/facts/conditions.py) | Bounded literal conditions and path-consistency facts. |
-| [`vppdetector/facts/containers.py`](../vppdetector/facts/containers.py) | Exact copy, mapping-operation and preserved-remainder facts. |
-| [`vppdetector/facts/creation.py`](../vppdetector/facts/creation.py) | Source class creation and constructor binding proofs. |
-| [`vppdetector/facts/creation_metadata.py`](../vppdetector/facts/creation_metadata.py) | Bounded source class metadata query evidence. |
-| [`vppdetector/facts/callable_metadata.py`](../vppdetector/facts/callable_metadata.py) | Proof premises for callable metadata queried during class creation. |
-| [`vppdetector/facts/builtin_protocols.py`](../vppdetector/facts/builtin_protocols.py) | Exact builtin truth, callability and length protocols. |
-| [`vppdetector/facts/locations.py`](../vppdetector/facts/locations.py) | AST and producer source locations. |
-| [`vppdetector/facts/scope.py`](../vppdetector/facts/scope.py) | Capture lookup and synchronous function body facts. |
-| [`vppdetector/scan/engine.py`](../vppdetector/scan/engine.py) | Structural scan scheduling, forwarding decisions and witness construction. |
-| [`vppdetector/scan/cache.py`](../vppdetector/scan/cache.py) | Context-local transformation locations and completed scan results with isolated mutable evidence. |
-| [`vppdetector/scan/flow.py`](../vppdetector/scan/flow.py) | Shared structural flow helpers. |
-| [`vppdetector/scan/returns.py`](../vppdetector/scan/returns.py) | Bounded returned-container routing. |
-| [`vppdetector/scanner.py`](../vppdetector/scanner.py) | Whole-package and on-demand scan scopes. |
-| [`vppdetector/assessment.py`](../vppdetector/assessment.py) | Public parameter-assessment API facade. |
-| [`vppdetector/assess/values.py`](../vppdetector/assess/values.py) | Abstract values tracked through one assessment path. |
-| [`vppdetector/assess/binding.py`](../vppdetector/assess/binding.py) | Finite call binding and binding stop outcomes. |
-| [`vppdetector/assess/calls.py`](../vppdetector/assess/calls.py) | Source call lookup and call-result interpretation for assessment frames. |
-| [`vppdetector/assess/inputs.py`](../vppdetector/assess/inputs.py) | Call-time capture and callable-instance binding checks. |
-| [`vppdetector/assess/expressions.py`](../vppdetector/assess/expressions.py) | Bounded literal, container, operator and conditional expression interpretation. |
-| [`vppdetector/assess/fresh.py`](../vppdetector/assess/fresh.py) | Source-backed member lookup for fresh receivers. |
-| [`vppdetector/assess/frame.py`](../vppdetector/assess/frame.py) | Mutable abstract state for one function path and its bounded operations. |
-| [`vppdetector/assess/statements.py`](../vppdetector/assess/statements.py) | Statement dispatch for return, import, loops, guards and definitions. |
-| [`vppdetector/assess/semantics/`](../vppdetector/assess/semantics/__init__.py) | Separate handlers for assignments, attribute calls, builtins, conditions and outcomes. |
-| [`vppdetector/assess/context_cache.py`](../vppdetector/assess/context_cache.py) | Context-local constructor and dispatch reuse and package initialization proofs. |
-| [`vppdetector/assess/runner.py`](../vppdetector/assess/runner.py) | Public call-specific assessment orchestration and evidence recording. |
-| [`vppdetector/assess/engine.py`](../vppdetector/assess/engine.py) | Proof state, boundaries and bounded recursive source-call orchestration. |
-| [`vppdetector/assess/proofs/decorators.py`](../vppdetector/assess/proofs/decorators.py) | Evidence checks for decorator effects and preservation of the wrapped body. |
-| [`vppdetector/assess/observations/contextvars.py`](../vppdetector/assess/observations/contextvars.py) | Validates caller-input facts and constructs source-backed ContextVar conditions. |
-| [`vppdetector/assess/observations/contextvar_support.py`](../vppdetector/assess/observations/contextvar_support.py) | Small AST, import and source-hash helpers used by observation proofs. |
-| [`vppdetector/assess/observations/contextvar_proxy.py`](../vppdetector/assess/observations/contextvar_proxy.py) | Proves supported proxy boolean and descriptor behavior from source. |
-| [`vppdetector/assess/observations/contextvar_packages.py`](../vppdetector/assess/observations/contextvar_packages.py) | Reads and indexes package source, resolves source targets, and assembles one bounded package proof. |
-| [`vppdetector/assess/observations/contextvar_package_scan.py`](../vppdetector/assess/observations/contextvar_package_scan.py) | Performs the bounded worklist traversal and applies call-specific ContextVar write rules using an explicit package scan state. |
-| [`vppdetector/assess/observations/__init__.py`](../vppdetector/assess/observations/__init__.py) | Internal observation service exports. |
-| [`vppdetector/encoding.py`](../vppdetector/encoding.py) | Retained encoding helper; source indexing uses Python's declared source encoding. |
+| [`src/vppdetector/cli.py`](../src/vppdetector/cli.py) | Whole-package scan CLI, argument parsing and JSON serialization. |
+| [`src/vppdetector/__init__.py`](../src/vppdetector/__init__.py) | Public Python interfaces. |
+| [`src/vppdetector/models.py`](../src/vppdetector/models.py) | Source identities, findings and parameter-level evidence. |
+| [`src/vppdetector/source/discovery.py`](../src/vppdetector/source/discovery.py) | Source roots, Python file discovery and module names. |
+| [`src/vppdetector/source/build.py`](../src/vppdetector/source/build.py) | Import-aware source graph construction and boundary collection. |
+| [`src/vppdetector/source/__init__.py`](../src/vppdetector/source/__init__.py) | Exports the current source indexing and query services. |
+| [`src/vppdetector/source/index.py`](../src/vppdetector/source/index.py) | Indexed functions, constructors, classes and source-location lookup. |
+| [`src/vppdetector/source/records.py`](../src/vppdetector/source/records.py) | Indexed source records and signatures. |
+| [`vppdetector/source/queries.py`](../src/vppdetector/source/queries.py) | Cached AST structure and syntax queries. |
+| [`vppdetector/_records.py`](../src/vppdetector/_records.py) | Shared record operations for source, facts, scanning and assessment. |
+| [`vppdetector/_analysis_context.py`](../src/vppdetector/_analysis_context.py) | Source preparation and reusable context that assembles the source and fact services and the consumer-specific caches. |
+| [`vppdetector/facts/adapter.py`](../src/vppdetector/facts/adapter.py) | Producer capability checks, source validation and read-only fact caching. |
+| [`vppdetector/facts/readonly.py`](../src/vppdetector/facts/readonly.py) | Immutable cached facts and mutable copies for isolated expansion. |
+| [`vppdetector/facts/calls.py`](../src/vppdetector/facts/calls.py) | Shared call identities, target status and validated call facts. |
+| [`vppdetector/facts/bindings.py`](../src/vppdetector/facts/bindings.py) | Source alias and class method binding proofs. |
+| [`vppdetector/facts/conditional_bindings.py`](../src/vppdetector/facts/conditional_bindings.py) | Conditional lookup and signature-only binding facts. |
+| [`vppdetector/facts/conditions.py`](../src/vppdetector/facts/conditions.py) | Bounded literal conditions and path-consistency facts. |
+| [`vppdetector/facts/containers.py`](../src/vppdetector/facts/containers.py) | Exact copy, mapping-operation and preserved-remainder facts. |
+| [`vppdetector/facts/creation.py`](../src/vppdetector/facts/creation.py) | Source class creation and constructor binding proofs. |
+| [`vppdetector/facts/creation_metadata.py`](../src/vppdetector/facts/creation_metadata.py) | Bounded source class metadata query evidence. |
+| [`vppdetector/facts/callable_metadata.py`](../src/vppdetector/facts/callable_metadata.py) | Proof premises for callable metadata queried during class creation. |
+| [`vppdetector/facts/builtin_protocols.py`](../src/vppdetector/facts/builtin_protocols.py) | Exact builtin truth, callability and length protocols. |
+| [`vppdetector/facts/locations.py`](../src/vppdetector/facts/locations.py) | AST and producer source locations. |
+| [`vppdetector/facts/scope.py`](../src/vppdetector/facts/scope.py) | Capture lookup and synchronous function body facts. |
+| [`vppdetector/scan/engine.py`](../src/vppdetector/scan/engine.py) | Structural scan scheduling, forwarding decisions and witness construction. |
+| [`vppdetector/scan/cache.py`](../src/vppdetector/scan/cache.py) | Context-local transformation locations and completed scan results with isolated mutable evidence. |
+| [`vppdetector/scan/flow.py`](../src/vppdetector/scan/flow.py) | Shared structural flow helpers. |
+| [`vppdetector/scan/returns.py`](../src/vppdetector/scan/returns.py) | Bounded returned-container routing. |
+| [`vppdetector/scanner.py`](../src/vppdetector/scanner.py) | Whole-package and on-demand scan scopes. |
+| [`vppdetector/assessment.py`](../src/vppdetector/assessment.py) | Public parameter-assessment API facade. |
+| [`vppdetector/assess/values.py`](../src/vppdetector/assess/values.py) | Abstract values tracked through one assessment path. |
+| [`vppdetector/assess/binding.py`](../src/vppdetector/assess/binding.py) | Finite call binding and binding stop outcomes. |
+| [`vppdetector/assess/calls.py`](../src/vppdetector/assess/calls.py) | Source call lookup and call-result interpretation for assessment frames. |
+| [`vppdetector/assess/inputs.py`](../src/vppdetector/assess/inputs.py) | Call-time capture and callable-instance binding checks. |
+| [`vppdetector/assess/expressions.py`](../src/vppdetector/assess/expressions.py) | Bounded literal, container, operator and conditional expression interpretation. |
+| [`vppdetector/assess/fresh.py`](../src/vppdetector/assess/fresh.py) | Source-backed member lookup for fresh receivers. |
+| [`vppdetector/assess/frame.py`](../src/vppdetector/assess/frame.py) | Mutable abstract state for one function path and its bounded operations. |
+| [`vppdetector/assess/statements.py`](../src/vppdetector/assess/statements.py) | Statement dispatch for return, import, loops, guards and definitions. |
+| [`vppdetector/assess/semantics/`](../src/vppdetector/assess/semantics/__init__.py) | Separate handlers for assignments, attribute calls, builtins, conditions and outcomes. |
+| [`vppdetector/assess/context_cache.py`](../src/vppdetector/assess/context_cache.py) | Context-local constructor and dispatch reuse and package initialization proofs. |
+| [`vppdetector/assess/runner.py`](../src/vppdetector/assess/runner.py) | Public call-specific assessment orchestration and evidence recording. |
+| [`vppdetector/assess/engine.py`](../src/vppdetector/assess/engine.py) | Proof state, boundaries and bounded recursive source-call orchestration. |
+| [`vppdetector/assess/proofs/decorators.py`](../src/vppdetector/assess/proofs/decorators.py) | Evidence checks for decorator effects and preservation of the wrapped body. |
+| [`vppdetector/assess/observations/contextvars.py`](../src/vppdetector/assess/observations/contextvars.py) | Validates caller-input facts and constructs source-backed ContextVar conditions. |
+| [`vppdetector/assess/observations/contextvar_support.py`](../src/vppdetector/assess/observations/contextvar_support.py) | Small AST, import and source-hash helpers used by observation proofs. |
+| [`vppdetector/assess/observations/contextvar_proxy.py`](../src/vppdetector/assess/observations/contextvar_proxy.py) | Proves supported proxy boolean and descriptor behavior from source. |
+| [`vppdetector/assess/observations/contextvar_packages.py`](../src/vppdetector/assess/observations/contextvar_packages.py) | Reads and indexes package source, resolves source targets, and assembles one bounded package proof. |
+| [`vppdetector/assess/observations/contextvar_package_scan.py`](../src/vppdetector/assess/observations/contextvar_package_scan.py) | Performs the bounded worklist traversal and applies call-specific ContextVar write rules using an explicit package scan state. |
+| [`vppdetector/assess/observations/__init__.py`](../src/vppdetector/assess/observations/__init__.py) | Internal observation service exports. |
+| [`vppdetector/encoding.py`](../src/vppdetector/encoding.py) | Retained encoding helper; source indexing uses Python's declared source encoding. |
 
 The scan cache keys results by entry identity, depth and the entry's class
 and alias query. It copies mutable producer evidence when storing results and
@@ -160,7 +159,7 @@ The original implementation is retained in
 [`legacy_vppdetector.py`](../legacy_vppdetector.py) for reproducibility. It
 requires the original `Path.getPath` and `Tool.tool` helper modules and
 contains dataset-specific paths. The current scan entry point is
-`vppdetector.py`.
+`vppdetector.cli`.
 
 Historical outputs under `APIDefWithVariadicPara/` and
 `VariadicParaPitfalls/` are unchanged. They contain the original scanner's

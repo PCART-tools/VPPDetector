@@ -25,7 +25,9 @@ Documentation = "https://github.com/PCART-tools/VPPDetector#documentation"
 Issues = "https://github.com/PCART-tools/VPPDetector/issues"
 
 [tool.setuptools.packages.find]
-include = ["vppdetector*"]
+where = ["src"]
+include = ["vppdetector", "vppdetector.*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
