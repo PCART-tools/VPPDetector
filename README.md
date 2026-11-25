@@ -36,7 +36,7 @@ python -m pip install -e .
 ```
 
 Installation provides the `vppdetector` command and the Python package, along
-with PCResolve and the other declared dependencies. PCResolve supplies
+with PCResolve. PCResolve supplies
 program facts and call resolution in the analyzer's Python environment; the
 analyzed library does not need to be installed or imported.
 
@@ -98,22 +98,25 @@ print(report.has_vpp)  # True
 ```
 
 Use `scan_api()` for one API or `assess_change()` for a selected changed argument
-and original call. See the [API reference](docs/api.md) for complete examples,
-source identities and result fields.
+and original call. See the [API reference](https://github.com/PCART-tools/VPPDetector/blob/main/docs/api.md)
+for complete examples, source identities and result fields.
 
 ## Documentation
 
-- [API reference](docs/api.md): CLI options, Python interfaces, source location,
-  analysis contexts and returned objects.
-- [Design](docs/design.md): detection rules, shared analysis core, module
-  responsibilities and the original research scanner.
-- [Analysis coverage and limits](docs/analysis-limits.md): supported propagation,
-  assessment states and unresolved analysis boundaries.
-- [Fact consumption contract](docs/fact-contract.md): PCResolve fact validation,
-  supported representations and consumer obligations.
+- [API reference](https://github.com/PCART-tools/VPPDetector/blob/main/docs/api.md):
+  CLI options, Python interfaces, source location, analysis contexts and
+  returned objects.
+- [Design](https://github.com/PCART-tools/VPPDetector/blob/main/docs/design.md):
+  detection rules, shared analysis core, module responsibilities and the
+  original research scanner.
+- [Analysis coverage and limits](https://github.com/PCART-tools/VPPDetector/blob/main/docs/analysis-limits.md):
+  supported propagation, assessment states and unresolved analysis boundaries.
+- [Fact consumption contract](https://github.com/PCART-tools/VPPDetector/blob/main/docs/fact-contract.md):
+  PCResolve fact validation, supported representations and consumer
+  obligations.
 
 The original scanner and historical outputs are retained; see
-[Version 1.0 research scanner](docs/design.md#version-10-research-scanner).
+[Version 1.0 research scanner](https://github.com/PCART-tools/VPPDetector/blob/main/docs/design.md#version-10-research-scanner).
 
 ## Publication
 
@@ -131,4 +134,4 @@ The original scanner and historical outputs are retained; see
 ## License
 
 VPPDetector is licensed under GNU AGPLv3. PCResolve is an MIT-licensed
-dependency; see `THIRD_PARTY_NOTICES.md`.
+dependency; see [THIRD_PARTY_NOTICES.md](https://github.com/PCART-tools/VPPDetector/blob/main/THIRD_PARTY_NOTICES.md).
